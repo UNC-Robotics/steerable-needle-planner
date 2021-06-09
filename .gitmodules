@@ -1,0 +1,6 @@
+[submodule "external/mpt"]
+	path = external/mpt
+	url = https://github.com/mengyu-fu/mpt.git
+[submodule "external/nigh"]
+	path = external/nigh
+	url = https://github.com/mengyu-fu/nigh.git
