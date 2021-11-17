@@ -437,6 +437,9 @@ RealNum CurveLength(const Vec3& sp, const Quat& sq, const Vec3& gp, const Quat& 
     }
 
     const RealNum cos_alpha = std::fmax(-1, std::fmin(1, st.dot(gt)));
+    if (cos_alpha > 1 - EPS) {
+        return d;
+    }
     const RealNum r = 0.5*d/(sqrt((1 - cos_alpha)/2));
 
     if (std::isnan(r*acos(cos_alpha))) {
