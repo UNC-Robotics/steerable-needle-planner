@@ -34,8 +34,8 @@
 #ifndef SNP_GLOBAL_PARAMETERS_H
 #define SNP_GLOBAL_PARAMETERS_H
 
-#ifndef USE_GLOBAL_VARIABLES
-#define USE_GLOBAL_VARIABLES
+#ifndef HAVE_GLOBAL_VARIABLES
+#define HAVE_GLOBAL_VARIABLES
 
 namespace unc::robotics::snp::global {
 
