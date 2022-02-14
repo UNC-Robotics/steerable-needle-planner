@@ -131,6 +131,7 @@ class ImageEnvironment {
 
     RealNum PointCost(const Vec3& p) const;
     RealNum PointCost(const Vec3& p, const CostType cost_type) const;
+    RealNum TrilinearInterpolatedCostFromMap(const Vec3& p) const;
 
     void SetCostType(const CostType type);
     Str CostTypeString();
@@ -158,6 +159,14 @@ class ImageEnvironment {
 
     void SaveRasPtc(const Str& file_name) const;
 
+    void EnableTrilinearInterpolation(const bool enable);
+    RealNum MinCost() const;
+    RealNum CostK() const;
+
+    void SetWorkspace(const bool value=true);
+    void SetWorkspace(const Idx& x, const Idx& y, const Idx& z, const bool value=true);
+    bool Workspace(const Idx& x, const Idx& y, const Idx& z) const;
+
   private:
     Affine ijk_to_ras_{Affine::Identity()};
     Affine ras_to_ijk_{Affine::Identity()};
@@ -171,6 +180,7 @@ class ImageEnvironment {
     RealNum min_dist_to_obs_{0};
 
     RealArray3 cost_array_;
+    BoolArray3 workspace_;
 
     bool use_white_list_{false};
     std::vector<std::pair<Vec3, RealNum>> white_list_;
@@ -178,11 +188,19 @@ class ImageEnvironment {
     bool use_obstacles_{true};
     bool use_hit_detection_{false};
 
+    RealNum min_cost_{0.01};
+    RealNum delta_{0.1};
+    RealNum cost_k_{1.0};
+    RealNum out_of_image_cost_{1000.0};
+    bool use_trilinear_interpolation_{false};
+
     std::map<Str, ImgNNWithMask> all_nns_;
 };
 
 using EnvPtr = std::shared_ptr<ImageEnvironment>;
 
-}
+} // namespace unc::robotics::snp
 
-#endif
+#include "impl/image_environment.hpp"
+
+#endif // SNP_IMAGE_ENVIRONMENG_H

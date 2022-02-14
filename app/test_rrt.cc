@@ -44,6 +44,8 @@
 using namespace unc::robotics::snp;
 
 int main(int argc, char** argv) {
+    Str const date_and_time = utils::DateAndTime();
+
     Str const needle_parameter_file = "../data/input/needle_parameters.txt";
     auto [min_curve_rad, needle_diameter, insertion_length, angle_constraint_degree]
         = utils::ReadNeedleParameters(needle_parameter_file, true);
@@ -53,10 +55,8 @@ int main(int argc, char** argv) {
     global::angle_constraint_degree = angle_constraint_degree;
 #endif
 
-    Str const start_and_goal_file = "../data/input/start_and_goal_poses.txt";
-    auto [start_p, start_q, goal_p, goal_q] = utils::ReadStartAndGoal(start_and_goal_file);
-
     bool constrain_goal_orientation = false;
+    Str suffix = "";
 
     if (argc > 1) {
         constrain_goal_orientation = std::atoi(argv[1]);
@@ -76,8 +76,21 @@ int main(int argc, char** argv) {
         cfg->seed = std::atoi(argv[3]);
     }
 
+    if (argc > 4) {
+        suffix = argv[4];
+        suffix = "_" + suffix;
+    }
+
+    Str const start_and_goal_file = "../data/input/start_and_goal_poses.txt";
+    auto [start_p, start_q, goal_p, goal_q] = utils::ReadStartAndGoal(start_and_goal_file);
+
+    cfg->output_file_root = "../data/output/" + date_and_time + suffix;
+    cfg->direct_connect_ratio = 1.0;
+    cfg->goal_pos_tolerance = 1.0;
     cfg->steer_step = -1;
+    cfg->goal_bias = 0.05;
     cfg->DefaultSetup();
+    cfg->env->SetCostType(ImageEnvironment::CostType::PATH_LENGTH);
     std::cout << "Using cost: " << cfg->env->CostTypeString() << std::endl;
 
     cfg->env->AddToWhiteList(start_p, 3);
@@ -101,31 +114,39 @@ int main(int argc, char** argv) {
     using namespace unc::robotics::mpt;
     using namespace unc::robotics::nigh;
     using NN = nn_select<RealNum, Space>::type;
-    using PlannerMode = point2point_planner;
     static constexpr bool reportStats = true;
 
     if (cfg->multi_threading) {
         using Threads = hardware_concurrency;
-        using Algorithm = NeedlePRRT<report_stats<reportStats>, NN, Threads, PlannerMode>;
+        using Algorithm = NeedlePRRT<report_stats<reportStats>, NN, Threads>;
 
         Planner<Scenario, Algorithm> planner(scenario);
         planner.addStart(start);
         planner.setGoalBias(cfg->goal_bias);
 
-        utils::Run(planner, cfg);
+        utils::Run<0>(planner, cfg);
+
+        auto const& result = planner.resultWithTime();
+        for (auto const& res : result) {
+            std::cout << res.first << ", " << res.second << std::endl;
+        }
     }
     else {
         using Threads = single_threaded;
-        using Algorithm = NeedlePRRT<report_stats<reportStats>, NN, Threads, PlannerMode>;
+        using Algorithm = NeedlePRRT<report_stats<reportStats>, NN, Threads>;
 
         Planner<Scenario, Algorithm> planner(scenario, cfg->seed);
         planner.addStart(start);
         planner.setGoalBias(cfg->goal_bias);
         MPT_LOG(INFO) << "using seed " << cfg->seed;
 
-        utils::Run(planner, cfg);
+        utils::Run<0>(planner, cfg);
+
+        auto const& result = planner.resultWithTime();
+        for (auto const& res : result) {
+            std::cout << res.first << ", " << res.second << std::endl;
+        }
     }
 
-    std::cout << "Main finished!" << std::endl;
     return 0;
 }

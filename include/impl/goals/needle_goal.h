@@ -36,8 +36,9 @@
 
 #include <mpt/goal_sampler.hpp>
 #include <utility>
+#include <queue>
 
-#include "../utils.h"
+#include "../../needle_utils.h"
 
 namespace unc::robotics::snp {
 
@@ -57,7 +58,7 @@ struct RandomNumber {
 
 using RandPtr = std::shared_ptr<RandomNumber>;
 
-}
+} // namespace unc::robotics::snp
 
 namespace unc::robotics::mpt {
 using namespace snp;
@@ -67,6 +68,7 @@ class NeedleGoalState {
     using State = typename Space::Type;
     using Distance = typename Space::Distance;
     using Scalar = typename Space::Distance;
+    using States = std::vector<State>;
 
     State goal_;
     Eigen::Matrix<Scalar, 3, 1> goal_p_;
@@ -88,9 +90,13 @@ class NeedleGoalState {
         return goal_;
     }
 
-    std::tuple<bool, Distance, State> operator() (const Space& space, const State& s) const {
+    std::tuple<bool, Distance, States> operator() (const Space& space, const State& s) const {
         if (cfg_->constrain_goal_orientation) {
             return this->GoalCheckWithOrientation(space, s);
+        }
+
+        if (cfg_->use_dubins_connection) {
+            return this->GoalCheckDubins(space, s);
         }
 
         return this->GoalCheck(space, s);
@@ -98,70 +104,152 @@ class NeedleGoalState {
 
   private:
     bool Valid(const State& s) const {
-        return cfg_->env->CollisionFree(s.translation());
+        const Eigen::Matrix<Scalar, 3, 1>& p = s.translation();
+        return (cfg_->env->CollisionFree(p));
     }
 
-    std::tuple<bool, Distance, State> GoalCheck(const Space& space, const State& s) const {
+    bool ValidMotion(const States& motion) const {
+        if (motion.size() == 0) {
+            throw std::runtime_error("Path contains no states! Cannot check path validity!");
+        }
+
+        std::queue<std::pair<int, int>> queue;
+        queue.emplace(0, motion.size());
+
+        Eigen::Matrix<Scalar, 3, 1> result_p;
+        while (!queue.empty()) {
+            auto p = queue.front();
+            queue.pop();
+
+            int middle = p.first + (p.second - p.first)/2;
+
+            if (!this->Valid(motion[middle])) {
+                return false;
+            }
+
+            if (p.first < middle) {
+                queue.emplace(p.first, middle);
+            }
+
+            if (middle+1 < p.second) {
+                queue.emplace(middle+1, p.second);
+            }
+        }
+
+        return true;
+    }
+
+    std::tuple<bool, Distance, States> GoalCheck(const Space& space, const State& s) const {
+        auto [pathToGoal, dist] = ForwardToWithPath(s, goal_p_, cfg_->rad_curv, cfg_->validity_res);
+
+        if (pathToGoal.empty()) {
+            return {true, dist, {s}};
+        }
+
+        auto const distToGoal = (pathToGoal.back().translation() - goal_p_).norm();
+
+        if (distToGoal > cfg_->goal_pos_tolerance) {
+            std::cout << "Invalid path to goal with err " << distToGoal
+                      << std::endl;
+            return {false, R_INF, {pathToGoal.back()}};
+        }
+
+        if (!this->ValidMotion(pathToGoal)) {
+            return {false, R_INF, {pathToGoal.back()}};
+        }
+
+        return {true, 0.0, {pathToGoal.back()}};
+    }
+
+    std::tuple<bool, Distance, States> GoalCheckDubins(const Space& space, const State& s) const {
+        auto [pathToGoal, dist, transition] = ShortestForwardToWithPath(s, goal_p_, cfg_->rad_curv, cfg_->validity_res, cfg_->goal_pos_tolerance);
+
+        if (pathToGoal.empty()) {
+            return {true, dist, {s}};
+        }
+
+        auto const distToGoal = (pathToGoal.back().translation() - goal_p_).norm();
+
+        if (distToGoal > cfg_->goal_pos_tolerance) {
+            std::cout << "Invalid path to goal with err " << distToGoal
+                      << std::endl;
+            return {false, R_INF, {pathToGoal.back()}};
+        }
+
+        if (!this->ValidMotion(pathToGoal)) {
+            return {false, R_INF, {pathToGoal.back()}};
+        }
+
+        if (transition) {
+            return {true, 0.0, {*transition, pathToGoal.back()}};
+        }
+
+        return {true, 0.0, {pathToGoal.back()}};
+    }
+
+    std::tuple<bool, Distance, States> GoalCheckSequential(const Space& space, const State& s) const {
         State goal_state;
-        const Vec3& p = s.translation();
-        const RealNum d = (p - goal_p_).norm();
+        auto const& p = s.translation();
+
+        auto const d = (p - goal_p_).norm();
 
         if (d > cfg_->goal_connecting_rad && rand_->Generate() > cfg_->direct_connect_ratio) {
-            return {false, R_INF, goal_state};
+            return {false, R_INF, {goal_state}};
         }
 
         goal_state = ForwardTo(s, goal_, cfg_->rad_curv);
+
         const Distance dist = (goal_state.translation() - goal_p_).norm();
 
         if (dist < cfg_->goal_pos_tolerance) {
-            std::vector<State> states = Interpolate(s, goal_state, cfg_->rad_curv,
+            States states = Interpolate(s, goal_state, cfg_->rad_curv,
                                                     cfg_->validity_res);
             states.push_back(goal_state);
 
             State last_valid_state = s;
-
             for (const State& state : states) {
                 if (!this->Valid(state)) {
                     const Distance valid_dist = (last_valid_state.translation() - goal_p_).norm();
 
                     if (valid_dist < cfg_->goal_pos_tolerance) {
-                        return {true, valid_dist, last_valid_state};
+                        return {true, valid_dist, {last_valid_state}};
                     }
                     else {
-                        return {false, R_INF, goal_state};
+                        return {false, R_INF, {goal_state}};
                     }
                 }
 
                 last_valid_state = state;
             }
 
-            return {true, dist, goal_state};
+            return {true, dist, {goal_state}};
         }
 
-        return {false, R_INF, goal_state};
+        return {false, R_INF, {goal_state}};
     }
 
-    std::tuple<bool, Distance, State> GoalCheckWithOrientation(const Space& space,
+    std::tuple<bool, Distance, States> GoalCheckWithOrientation(const Space& space,
             const State& s) const {
         State goal_state;
-        const Vec3& p = s.translation();
-        const RealNum d = (p - goal_p_).norm();
+        auto const& p = s.translation();
+
+        auto const d = (p - goal_p_).norm();
 
         if (d > cfg_->goal_connecting_rad && rand_->Generate() > cfg_->direct_connect_ratio) {
-            return {false, R_INF, goal_state};
+            return {false, R_INF, {goal_state}};
         }
 
         goal_state = ForwardTo(s, goal_, cfg_->rad_curv);
+
         const Distance dist = (goal_state.translation() - goal_p_).norm();
         const Distance ang_diff = DirectionDifference(goal_state.rotation(), goal_q_);
 
         if (dist < cfg_->goal_pos_tolerance) {
-            std::vector<State> states = Interpolate(s, goal_state, cfg_->rad_curv,
+            States states = Interpolate(s, goal_state, cfg_->rad_curv,
                                                     cfg_->validity_res);
             states.push_back(goal_state);
 
             State last_valid_state = s;
-
             for (const State& state : states) {
                 if (!this->Valid(state)) {
                     const Distance valid_dist = (last_valid_state.translation() - goal_p_).norm();
@@ -170,14 +258,14 @@ class NeedleGoalState {
                         const Distance valid_ang_diff = DirectionDifference(last_valid_state.rotation(), goal_q_);
 
                         if (valid_ang_diff < cfg_->goal_ang_tolerance) {
-                            return {true, valid_dist + valid_ang_diff, last_valid_state};
+                            return {true, valid_dist + valid_ang_diff, {last_valid_state}};
                         }
                         else {
-                            return {false, valid_dist + valid_ang_diff, last_valid_state};
+                            return {false, valid_dist + valid_ang_diff, {last_valid_state}};
                         }
                     }
                     else {
-                        return {false, R_INF, goal_state};
+                        return {false, R_INF, {goal_state}};
                     }
                 }
 
@@ -185,14 +273,14 @@ class NeedleGoalState {
             }
 
             if (ang_diff < cfg_->goal_ang_tolerance) {
-                return {true, dist + ang_diff, goal_state};
+                return {true, dist + ang_diff, {goal_state}};
             }
             else {
-                return {false, dist + ang_diff, goal_state};
+                return {false, dist + ang_diff, {goal_state}};
             }
         }
 
-        return {false, R_INF, goal_state};
+        return {false, R_INF, {goal_state}};
     }
 };
 
@@ -213,6 +301,6 @@ class GoalSampler<NeedleGoalState<Space>> {
     }
 };
 
-}
+} // namespace unc::robotics::mpt
 
-#endif
+#endif // SNP_NEEDLE_GOAL_STATE_H

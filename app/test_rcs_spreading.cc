@@ -44,6 +44,8 @@
 using namespace unc::robotics::snp;
 
 int main(int argc, char** argv) {
+    Str const date_and_time = utils::DateAndTime();
+
     Str const needle_parameter_file = "../data/input/needle_parameters.txt";
     auto [min_curve_rad, needle_diameter, insertion_length, angle_constraint_degree]
         = utils::ReadNeedleParameters(needle_parameter_file, true);
@@ -53,10 +55,9 @@ int main(int argc, char** argv) {
     global::angle_constraint_degree = angle_constraint_degree;
 #endif
 
-    Str const start_and_goal_file = "../data/input/start_and_goal_poses.txt";
-    auto [start_p, start_q] = utils::ReadGoal(start_and_goal_file);
-
     bool constrain_goal_orientation = false;
+    Str suffix = "";
+
     ConfigPtr cfg(new ProblemConfig(constrain_goal_orientation,
                                     min_curve_rad,
                                     needle_diameter,
@@ -72,16 +73,27 @@ int main(int argc, char** argv) {
         cfg->seed = std::atoi(argv[2]);
     }
 
+    if (argc > 3) {
+        suffix = argv[3];
+        suffix = "_" + suffix;
+    }
+
+    Str const start_and_goal_file = "../data/input/start_and_goal_poses.txt";
+    auto [start_p, start_q] = utils::ReadGoal(start_and_goal_file);
+
+    cfg->output_file_root = "../data/output/" + date_and_time + suffix;
     cfg->sample_orientation = true;
     cfg->goal_pos_tolerance = 3.0;
     cfg->start_connect_ratio = 0.01;
     cfg->DefaultSetup();
+    cfg->env->SetCostType(ImageEnvironment::CostType::PATH_LENGTH);
 
+    Str goal_file = "../data/input/goal_regions.txt";
     std::ifstream fin;
-    fin.open("../data/input/goal_regions.txt");
+    fin.open(goal_file);
 
     if (!fin.is_open()) {
-        throw std::runtime_error("Failed to open ../data/input/goal_regions.txt");
+        throw std::runtime_error("Failed to open " + goal_file);
     }
 
     std::vector<Vec3> goals;
@@ -100,7 +112,7 @@ int main(int argc, char** argv) {
 
     start_q = Quat::FromTwoVectors(Vec3::UnitZ(), (goals[0] - start_p).normalized());
 
-    using Scenario = PRCSSpreadingWithGoalRegionScenario<RealNum>::Type;
+    using Scenario = PRCSSpreadingScenario<RealNum>::Type;
     using State = typename Scenario::State;
     using Space = typename Scenario::Space;
 
@@ -118,31 +130,29 @@ int main(int argc, char** argv) {
     using namespace unc::robotics::mpt;
     using namespace unc::robotics::nigh;
     using NN = nn_select<RealNum, Space>::type;
-    using PlannerMode = spreading_planner;
     static constexpr bool reportStats = true;
 
     if (cfg->multi_threading) {
         using Threads = hardware_concurrency;
-        using Algorithm = NeedlePRCS<report_stats<reportStats>, NN, Threads, PlannerMode>;
+        using Algorithm = NeedlePRCS<report_stats<reportStats>, NN, Threads, spreading>;
 
         Planner<Scenario, Algorithm> planner(scenario);
         planner.addStart(start);
         planner.setAddStartRatio(cfg->start_connect_ratio);
 
-        utils::Run(planner, cfg);
+        utils::Run<0>(planner, cfg);
     }
     else {
         using Threads = single_threaded;
-        using Algorithm = NeedlePRCS<report_stats<reportStats>, NN, Threads, PlannerMode>;
+        using Algorithm = NeedlePRCS<report_stats<reportStats>, NN, Threads, spreading>;
 
         Planner<Scenario, Algorithm> planner(scenario, cfg->seed);
         planner.addStart(start);
         planner.setAddStartRatio(cfg->start_connect_ratio);
         MPT_LOG(INFO) << "using seed " << cfg->seed;
 
-        utils::Run(planner, cfg);
+        utils::Run<0>(planner, cfg);
     }
 
-    std::cout << "Main finished!" << std::endl;
     return 0;
 }

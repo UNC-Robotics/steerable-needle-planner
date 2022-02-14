@@ -84,10 +84,14 @@ int main(int argc, char** argv) {
     cfg->output_file_root = "../data/output/" + date_and_time + suffix;
     cfg->sample_orientation = true;
     cfg->goal_pos_tolerance = 3.0;
-    cfg->steer_step = -1;
+    cfg->start_connect_ratio = 0.05;
+    cfg->steer_step = 16.0;
     cfg->goal_bias = 0.0;
     cfg->DefaultSetup();
     cfg->env->SetCostType(ImageEnvironment::CostType::PATH_LENGTH);
+#ifdef HAVE_GLOBAL_VARIABLES
+    global::aorrt_cost_w = 1.0; // cost map 10; length 1; clearance 10
+#endif
 
     Str goal_file = "../data/input/goal_regions.txt";
     std::ifstream fin;
@@ -113,7 +117,7 @@ int main(int argc, char** argv) {
 
     start_q = Quat::FromTwoVectors(Vec3::UnitZ(), (goals[0] - start_p).normalized());
 
-    using Scenario = SpreadingScenario<RealNum>::Type;
+    using Scenario = PAORRTSpreadingScenario<RealNum>::Type;
     using State = typename Scenario::State;
     using Space = typename Scenario::Space;
 
@@ -135,7 +139,7 @@ int main(int argc, char** argv) {
 
     if (cfg->multi_threading) {
         using Threads = hardware_concurrency;
-        using Algorithm = NeedlePRRT<report_stats<reportStats>, NN, Threads, spreading>;
+        using Algorithm = NeedlePRRT<report_stats<reportStats>, NN, Threads, spreading, optimal>;
 
         Planner<Scenario, Algorithm> planner(scenario);
         planner.addStart(start);
@@ -145,7 +149,7 @@ int main(int argc, char** argv) {
     }
     else {
         using Threads = single_threaded;
-        using Algorithm = NeedlePRRT<report_stats<reportStats>, NN, Threads, spreading>;
+        using Algorithm = NeedlePRRT<report_stats<reportStats>, NN, Threads, spreading, optimal>;
 
         Planner<Scenario, Algorithm> planner(scenario, cfg->seed);
         planner.addStart(start);

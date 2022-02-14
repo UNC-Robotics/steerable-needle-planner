@@ -118,6 +118,6 @@ class MotionPrimitive {
     }
 };
 
-}
+} // unc::robotics::snp
 
-#endif
+#endif // SNP_MOTION_PRIMITIVE_H

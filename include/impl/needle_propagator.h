@@ -38,7 +38,7 @@
 
 #include "motion_primitive.h"
 #include "../problem_config.h"
-#include "../utils.h"
+#include "../needle_utils.h"
 
 namespace unc::robotics::snp {
 
@@ -58,7 +58,7 @@ std::optional<State> ConnectPointWithCurveDirectly(const State& from, const Stat
     const RealNum d = sg.norm();
     const RealNum cos_theta = (sg.normalized()).dot(st);
 
-    if (cos_theta > 1 - EPS) {
+    if (d < EPS || cos_theta > 1 - EPS) {
         result.translation() = from.translation() + st*d;
         result.rotation() = sq;
         return result;
@@ -67,12 +67,12 @@ std::optional<State> ConnectPointWithCurveDirectly(const State& from, const Stat
     RealNum r = rad_curv;
 
     if (cos_theta > 0) {
-        r = std::fmax(rad_curv, 0.5*d/sin(acos(cos_theta)));
+        r = std::fmax(rad_curv, 0.5*d/std::sin(std::acos(cos_theta)));
     }
 
     const Vec3 normal = (st.cross(sg)).normalized();
     const Vec3 center = sp + r*(normal.cross(st));
-    const RealNum max_ang = acos(((gp - center).normalized()).dot((sp - center).normalized()));
+    const RealNum max_ang = std::acos(((gp - center).normalized()).dot((sp - center).normalized()));
 
     RealNum proceed_ang = max_ang;
 
@@ -91,7 +91,7 @@ std::optional<State> ConnectPointWithCurveDirectly(const State& from, const Stat
     result.translation() = proceed_quat*(sp - center) + center;
     result.rotation() = (proceed_quat*sq).normalized();
 
-    if(std::isnan(result.rotation().w())) {
+    if (std::isnan(result.rotation().w())) {
         throw std::runtime_error("[ConnectPointWithCurveDirectly] Get nan result quaternion!");
     }
 
@@ -117,7 +117,32 @@ Quat RotateAroundZ(Quat init_q, const RealNum& angle) {
     return (proceed_quat * init_q).normalized();
 }
 
+template <typename State, typename RNG, typename Uniform>
+std::optional<State> RandomForward(const State& from, const State& to, RNG& rng, Uniform& uniform_dist,
+                                   const RealNum& rad_curv, const RealNum& steer_step, const Idx& num_attempt,
+                                   const bool& return_first) {
+    Vec3 p = from.translation();
+    Quat q = from.rotation().normalized();
+
+    State result(q, p);
+
+    RealNum theta = 2 * M_PI * uniform_dist(rng);
+    RealNum ell = steer_step * uniform_dist(rng);
+
+    q = RotateAroundZ(q, theta);
+
+    const Vec3 center = p + rad_curv*(q*Vec3::UnitX());
+    const RealNum max_ang = ell/rad_curv;
+    const Vec3 normal_vec = q*Vec3::UnitY();
+
+    Quat proceed_quat(AngleAxis(max_ang, normal_vec));
+    result.translation() = proceed_quat*(p - center) + center;
+    result.rotation() = (proceed_quat*q).normalized();
+
+    return result;
 }
+
+} // namespace utils
 
 template <typename State>
 class CurvePropagator {
@@ -139,6 +164,27 @@ class CurvePropagator {
     RealNormalDist normal_;
 };
 
+template <typename State>
+class RandomForwardPropagator {
+  public:
+    RandomForwardPropagator(const ConfigPtr cfg)
+        : rad_curv_(cfg->rad_curv)
+        , steer_step_(cfg->steer_step) {
+    }
+
+    template <typename RNG>
+    std::optional<State> operator()(const State& from, const State& to, RNG& rng) {
+        return utils::RandomForward(from, to, rng, uniform_, rad_curv_, steer_step_, num_attempt_, false);
+    }
+
+  private:
+    const RealNum rad_curv_;
+    const RealNum steer_step_;
+    const Idx num_attempt_{10};
+
+    RealUniformDist uniform_;
+};
+
 template<typename State>
 class MotionPrimitivePropagator {
   public:
@@ -148,7 +194,6 @@ class MotionPrimitivePropagator {
         , delta_theta_max_(cfg->delta_theta_max)
         , delta_ell_min_(cfg->delta_ell_min)
         , delta_theta_min_(cfg->delta_theta_min) {
-
         rad_sequence_.assign({rad_curv_, R_INF});
 
         max_length_i_ = std::ceil(std::log2(delta_ell_max_/delta_ell_min_));
@@ -159,13 +204,13 @@ class MotionPrimitivePropagator {
 
         length_sequence_.resize(std::pow(2, max_length_i_));
         length_sequence_[0] = delta_ell_max_;
-        length_sequence_[1] = 0.5*length_sequence_[0];
+        length_sequence_[1] = 0.5 * length_sequence_[0];
 
         for (unsigned i = 2; i < length_sequence_.size(); i += 2) {
-            unsigned parent_i = i/2;
-            RealNum d_length = delta_ell_max_/std::pow(2, std::floor(std::log2(i)) + 1);
-            length_sequence_[i] = length_sequence_[parent_i] - d_length;
-            length_sequence_[i+1] = length_sequence_[parent_i] + d_length;
+            const unsigned parent_i = i/2;
+            const RealNum d_length = delta_ell_max_/std::pow(2, std::floor(std::log2(i)) + 1);
+            length_sequence_[i] = length_sequence_[parent_i] + d_length;
+            length_sequence_[i+1] = length_sequence_[parent_i] - d_length;
         }
 
         init_num_orientations_ = std::round(2 * M_PI/delta_theta_max_);
@@ -182,8 +227,8 @@ class MotionPrimitivePropagator {
         for (unsigned i = 2*init_num_orientations_; i < angle_sequence_.size(); i += 2) {
             unsigned parent_i = i/2;
             RealNum d_angle = delta_theta_max_/std::pow(2, std::floor(std::log2(i)) - 1);
-            angle_sequence_[i] = angle_sequence_[parent_i] - d_angle;
-            angle_sequence_[i+1] = angle_sequence_[parent_i] + d_angle;
+            angle_sequence_[i] = angle_sequence_[parent_i] + d_angle;
+            angle_sequence_[i+1] = angle_sequence_[parent_i] - d_angle;
         }
 
         motion_primitives_.resize(rad_sequence_.size());
@@ -198,14 +243,14 @@ class MotionPrimitivePropagator {
     }
 
     std::optional<State> operator()(const State& from, const std::array<unsigned, 3>& indices) const {
-        const auto& base_state = motion_primitives_[indices[0]][indices[1]].FinalState();
+        auto const& base_state = motion_primitives_[indices[0]][indices[1]].FinalState();
 
         return utils::TransformToNewBase(base_state, this->ComputeStartPose(from, indices[2]));
     }
 
     std::optional<State> operator()(const State& from, const unsigned& rad_idx,
                                     const unsigned& length_idx) const {
-        const auto& base_state = motion_primitives_[rad_idx][length_idx].FinalState();
+        auto const& base_state = motion_primitives_[rad_idx][length_idx].FinalState();
 
         return utils::TransformToNewBase(base_state, from);
     }
@@ -278,6 +323,6 @@ class MotionPrimitivePropagator {
     std::vector<std::vector<MotionPrimitive<State>>> motion_primitives_;
 };
 
-}
+} // end namespace unc::robotics::snp
 
-#endif
+#endif // SNP_NEEDLE_PROPAGATOR_H

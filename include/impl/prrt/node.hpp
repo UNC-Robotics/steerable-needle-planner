@@ -28,23 +28,69 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//! @author Mengyu Fu
+//! @author Jeff Ichnowski
 
 #pragma once
-#ifndef SNP_GLOBAL_PARAMETERS_H
-#define SNP_GLOBAL_PARAMETERS_H
+#ifndef MPT_IMPL_PRRT_NODE_HPP
+#define MPT_IMPL_PRRT_NODE_HPP
 
-#ifndef HAVE_GLOBAL_VARIABLES
-#define HAVE_GLOBAL_VARIABLES
+#include "edge.hpp"
+#include <utility>
 
-namespace unc::robotics::snp::global {
+namespace unc::robotics::mpt::impl::prrt {
+template <typename State, typename Traj>
+class Node {
+    using Scalar = typename State::Distance;
 
-double needle_min_curve_rad = 50.0;
-double angle_constraint_degree = 90.0;
-double aorrt_cost_w = 1.0;
+    State state_;
+    Edge<State, Traj> parent_;
+    Scalar traj_length_{0};
+    Scalar cost_{0};
 
-} // namespace unc::robotics::snp::global
+  public:
+    template <typename ... Args>
+    Node(Traj&& traj, Node *parent, Args&& ... args)
+        : state_(std::forward<Args>(args)...)
+        , parent_(std::move(traj), parent)
+    {
+    }
 
-#endif // HAVE_GLOBAL_VARIABLES
+    Scalar& length() {
+        return traj_length_;
+    }
 
-#endif // SNP_GLOBAL_PARAMETERS_H
+    const Scalar& length() const {
+        return traj_length_;
+    }
+
+    Scalar& cost() {
+        return cost_;
+    }
+
+    const Scalar& cost() const {
+        return cost_;
+    }
+
+    const State& state() const {
+        return state_;
+    }
+
+    const Edge<State, Traj>& edge() const {
+        return parent_;
+    }
+
+    const Node* parent() const {
+        return parent_;
+    }
+};
+
+struct NodeKey {
+    template <typename State, typename Traj>
+    const State& operator() (const Node<State, Traj>* node) const {
+        return node->state();
+    }
+};
+
+} // unc::robotics::mpt::impl::prrt
+
+#endif // MPT_IMPL_PRRT_NODE_HPP

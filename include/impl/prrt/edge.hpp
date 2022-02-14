@@ -28,23 +28,40 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//! @author Mengyu Fu
+//! @author Jeff Ichnowski
 
 #pragma once
-#ifndef SNP_GLOBAL_PARAMETERS_H
-#define SNP_GLOBAL_PARAMETERS_H
+#ifndef MPT_IMPL_PRRT_EDGE_HPP
+#define MPT_IMPL_PRRT_EDGE_HPP
 
-#ifndef HAVE_GLOBAL_VARIABLES
-#define HAVE_GLOBAL_VARIABLES
+#include <mpt/impl/link.hpp>
+#include <utility>
 
-namespace unc::robotics::snp::global {
+namespace unc::robotics::mpt::impl::prrt {
+template <typename State, typename Traj>
+class Node;
 
-double needle_min_curve_rad = 50.0;
-double angle_constraint_degree = 90.0;
-double aorrt_cost_w = 1.0;
+template <typename State, typename Traj>
+class Edge : public Link<Traj> {
+    using Node = prrt::Node<State, Traj>;
 
-} // namespace unc::robotics::snp::global
+    Node *to_;
 
-#endif // HAVE_GLOBAL_VARIABLES
+  public:
+    Edge(Traj&& traj, Node* to)
+        : Link<Traj>(std::move(traj))
+        , to_(to) {
+    }
 
-#endif // SNP_GLOBAL_PARAMETERS_H
+    operator Node* () {
+        return to_;
+    }
+
+    operator const Node* () const {
+        return to_;
+    }
+};
+
+} // unc::robotics::mpt::impl::prrt
+
+#endif // MPT_IMPL_PRRT_EDGE_HPP

@@ -37,11 +37,12 @@
 #include <cmath>
 
 #include "../problem_config.h"
-#include "../utils.h"
+#include "../needle_utils.h"
 
 namespace unc::robotics::snp {
 
 struct null_sampler {};
+struct sample_random {};
 struct sample_sphere {};
 struct sample_trumpet {};
 struct sample_rugby {};
@@ -65,18 +66,19 @@ Vec3 SampleInUnitSphere(RNG& rng, Uniform& uniform, Normal& normal) {
 template<typename RNG, typename Uniform, typename Normal>
 Quat SampleOrientation(const Vec3& sp, const Vec3& p, const RealNum& rad_curv, RNG& rng,
                        Uniform& uniform, Normal& normal) {
-    Vec3 sg = sp - p;
-    RealNum d = sg.norm();
-    RealNum alpha = asin(d/(2.0*rad_curv)) * uniform(rng);
-    RealNum beta = 2*M_PI*uniform(rng);
+    const Vec3 sg = sp - p;
+    const RealNum d = sg.norm();
+    const RealNum theta = std::fmin(1.0, d/(2.0*rad_curv));
+    const RealNum alpha = std::asin(theta) * uniform(rng);
+    const RealNum beta = 2*M_PI*uniform(rng);
 
     Vec3 dir;
-    dir[2] = cos(alpha);
-    dir[0] = sin(alpha)*sin(beta);
-    dir[1] = sin(alpha)*cos(beta);
+    dir[2] = std::cos(alpha);
+    dir[0] = std::sin(alpha)*std::sin(beta);
+    dir[1] = std::sin(alpha)*std::cos(beta);
 
-    Quat local = Quat::FromTwoVectors(Vec3::UnitZ(), sg.normalized());
-    Vec3 tang = -(local*dir.normalized());
+    const Quat local = Quat::FromTwoVectors(Vec3::UnitZ(), sg.normalized());
+    const Vec3 tang = -(local*dir.normalized());
 
     return Quat::FromTwoVectors(Vec3::UnitZ(), tang).normalized();
 }
@@ -87,7 +89,7 @@ Quat SampleOrientation(const Vec3& sp, const Vec3& gp, const Vec3& p, const Idx&
     bool valid = false;
     Vec3 sg = sp - p;
     RealNum d = sg.norm();
-    RealNum alpha = asin(d/(2.0*rad_curv));
+    RealNum alpha = std::asin(d/(2.0*rad_curv));
     RealNum beta = 2*M_PI;
 
     RealNum a, b;
@@ -100,9 +102,9 @@ Quat SampleOrientation(const Vec3& sp, const Vec3& gp, const Vec3& p, const Idx&
         a = alpha*uniform(rng);
         b = beta*uniform(rng);
 
-        dir[2] = cos(a);
-        dir[0] = sin(a)*sin(b);
-        dir[1] = sin(a)*cos(b);
+        dir[2] = std::cos(a);
+        dir[0] = std::sin(a)*std::sin(b);
+        dir[1] = std::sin(a)*std::cos(b);
 
         local = Quat::FromTwoVectors(Vec3::UnitZ(), sg.normalized());
         tang = -(local*dir.normalized());
@@ -115,6 +117,14 @@ Quat SampleOrientation(const Vec3& sp, const Vec3& gp, const Vec3& p, const Idx&
     }
 
     return Quat::FromTwoVectors(Vec3::UnitZ(), tang).normalized();
+}
+
+template<typename RNG, typename Uniform>
+Quat SampleOrientation(RNG& rng, Uniform& uniform) {
+    Quat rot_z(AngleAxis(2 * M_PI * uniform(rng), Vec3::UnitZ().normalized()));
+    Quat rot_y(AngleAxis(2 * M_PI * uniform(rng), Vec3::UnitY().normalized()));
+    Quat rot_x(AngleAxis(2 * M_PI * uniform(rng), Vec3::UnitX().normalized()));
+    return rot_x * rot_y * rot_z;
 }
 
 template<typename RNG, typename Uniform>
@@ -149,8 +159,8 @@ Vec3 SampleInTrumpet(const RealNum& rad_curv, const RealNum& ins_length, const R
             continue;
         }
 
-        sample[0] = r*cos(t);
-        sample[1] = r*sin(t);
+        sample[0] = r * std::cos(t);
+        sample[1] = r * std::sin(t);
 
         valid = true;
     }
@@ -187,6 +197,44 @@ class NeedleSampler<State, null_sampler> {
 
   private:
     const State start_;
+};
+
+template<typename State>
+class NeedleSampler<State, sample_random> {
+  public:
+    NeedleSampler(const ConfigPtr cfg, const State& start, const State& goal)
+        : sample_orientation_(cfg->sample_orientation)
+        , start_p_(start.translation())
+        , start_q_(start.rotation().normalized())
+        , rad_curv_(cfg->rad_curv)
+        , ins_length_(cfg->ins_length + 10) {
+
+    }
+
+    template <typename RNG>
+    State operator() (RNG& rng) {
+        State sample;
+        sample.translation() = start_p_ + ins_length_*utils::SampleInUnitSphere(rng, uniform_, normal_);
+
+        if (sample_orientation_) {
+            sample.rotation() = utils::SampleOrientation(rng, uniform_);
+        }
+        else {
+            sample.rotation() = start_q_;
+        }
+
+        return sample;
+    }
+
+  private:
+    const bool sample_orientation_;
+    const Vec3 start_p_;
+    const Quat start_q_;
+    const RealNum rad_curv_;
+    const RealNum ins_length_;
+
+    RealUniformDist uniform_;
+    RealNormalDist normal_;
 };
 
 template<typename State>
@@ -242,7 +290,7 @@ class NeedleSampler<State, sample_trumpet> {
                 max_r_ = ins_length_;
             }
             else {
-                max_r_ = sqrt(ins_length_*ins_length_ - rad_curv_*rad_curv_);
+                max_r_ = std::sqrt(ins_length_*ins_length_ - rad_curv_*rad_curv_);
             }
         }
         else {
@@ -261,7 +309,7 @@ class NeedleSampler<State, sample_trumpet> {
                 max_r_ = ins_length_;
             }
             else {
-                max_r_ = sqrt(ins_length_*ins_length_ - rad_curv_*rad_curv_);
+                max_r_ = std::sqrt(ins_length_*ins_length_ - rad_curv_*rad_curv_);
             }
         }
         else {
@@ -329,7 +377,7 @@ class NeedleSampler<State, sample_rugby> {
         }
         else {
             sample_sphere_ = false;
-            center_[0] = - sqrt(rad_curv2_ - (center_[1])*(center_[1]));
+            center_[0] = - std::sqrt(rad_curv2_ - (center_[1])*(center_[1]));
         }
 
         rugby_q_ = Quat::FromTwoVectors(Vec3::UnitZ(), sg_).normalized();
@@ -387,13 +435,13 @@ class NeedleSampler<State, sample_rugby> {
 
             RealNum max_r;
             RealNum z = abs(sample[2] - center_[1]);
-            max_r = sqrt(abs(rad_curv2_ - z*z)) + center_[0];
+            max_r = std::sqrt(abs(rad_curv2_ - z*z)) + center_[0];
 
             auto [t, r] = utils::SampleInUnitCircle(rng, uniform_);
             r *= max_r;
 
-            sample[0] = r * cos(t);
-            sample[1] = r * sin(t);
+            sample[0] = r * std::cos(t);
+            sample[1] = r * std::sin(t);
 
             sample = start_p_ + rugby_q_*sample;
 
@@ -449,7 +497,7 @@ class NeedleSampler<State, sample_intersection> {
         }
         else {
             sample_sphere_ = false;
-            center_[0] = - sqrt(rad_curv2_ - (center_[1])*(center_[1]));
+            center_[0] = - std::sqrt(rad_curv2_ - (center_[1])*(center_[1]));
         }
 
         rugby_q_ = Quat::FromTwoVectors(Vec3::UnitZ(), sg_).normalized();
@@ -510,13 +558,13 @@ class NeedleSampler<State, sample_intersection> {
 
             RealNum max_r;
             RealNum z = abs(sample[2] - center_[1]);
-            max_r = sqrt(abs(rad_curv2_ - z*z)) + center_[0];
+            max_r = std::sqrt(abs(rad_curv2_ - z*z)) + center_[0];
 
             auto [t, r] = utils::SampleInUnitCircle(rng, uniform_);
             r *= max_r;
 
-            sample[0] = r * cos(t);
-            sample[1] = r * sin(t);
+            sample[0] = r * std::cos(t);
+            sample[1] = r * std::sin(t);
 
             sample = start_p_ + rugby_q_*sample;
 
@@ -524,9 +572,9 @@ class NeedleSampler<State, sample_intersection> {
                 continue;
             }
 
-            if (constrain_goal_orientation_ &&
-                    ComputeDistanceToTrumpetBoundary(goal_p_, -goal_t_, sample, rad_curv_,
-                            ang_tolerance_) > pos_tolerance_) {
+            if (constrain_goal_orientation_
+                && DistanceToTrumpetBoundary(goal_p_, -goal_t_, sample, rad_curv_, ang_tolerance_) > pos_tolerance_)
+            {
                 continue;
             }
 
@@ -548,9 +596,9 @@ class NeedleSampler<State, sample_intersection> {
                 continue;
             }
 
-            if (constrain_goal_orientation_ &&
-                    ComputeDistanceToTrumpetBoundary(goal_p_, -goal_t_, sample, rad_curv_,
-                            ang_tolerance_) > pos_tolerance_) {
+            if (constrain_goal_orientation_
+                && DistanceToTrumpetBoundary(goal_p_, -goal_t_, sample, rad_curv_, ang_tolerance_) > pos_tolerance_)
+            {
                 continue;
             }
 
@@ -561,6 +609,6 @@ class NeedleSampler<State, sample_intersection> {
     }
 };
 
-}
+} // namespace unc::robotics::snp
 
-#endif
+#endif // SNP_NEEDLE_SAMPLER_H

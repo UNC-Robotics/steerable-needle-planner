@@ -34,29 +34,8 @@
 #ifndef SNP_NEEDLE_SPREADING_PRCS_IMPL_H
 #define SNP_NEEDLE_SPREADING_PRCS_IMPL_H
 
-#include "prcs/prcs.hpp"
-#include "prcs/edge.hpp"
-#include "prcs/node.hpp"
-#include "prcs/priority_queue.hpp"
-
-#include <mpt/impl/atom.hpp>
-#include <mpt/impl/goal_has_sampler.hpp>
-#include <mpt/impl/link_trajectory.hpp>
-#include <mpt/impl/object_pool.hpp>
-#include <mpt/impl/planner_base.hpp>
-#include <mpt/impl/scenario_goal.hpp>
-#include <mpt/impl/scenario_goal_sampler.hpp>
-#include <mpt/impl/scenario_link.hpp>
-#include <mpt/impl/scenario_rng.hpp>
-#include <mpt/impl/scenario_sampler.hpp>
-#include <mpt/impl/scenario_space.hpp>
-#include <mpt/impl/timer_stat.hpp>
-#include <mpt/impl/worker_pool.hpp>
-#include <mpt/log.hpp>
-#include <mpt/random_device_seed.hpp>
-#include <forward_list>
-#include <mutex>
-#include <utility>
+#include "prcs_base.hpp"
+#include "priority_queue.hpp"
 
 namespace unc::robotics::mpt::impl::prcs {
 template <typename Scenario, int maxThreads, bool reportStats, typename NNStrategy>
@@ -108,9 +87,14 @@ class NeedleSpreadingPRCS : public
     PriorityQueue queue_;
 
     std::mutex mutex_;
+    std::mutex startMutex_;
     std::mutex terminationMutex_;
     std::mutex activeMutex_;
     std::forward_list<Node*> goals_;
+    Distance bestCost_{std::numeric_limits<Distance>::infinity()};
+    snp::TimePoint start_time_;
+    using ResultSeq = std::vector<std::pair<float, Distance>>;
+    ResultSeq resultWithTime_;
 
     Node* approxRes_{nullptr};
     Distance bestDist_{std::numeric_limits<Distance>::infinity()};
@@ -126,12 +110,17 @@ class NeedleSpreadingPRCS : public
     WorkerPool<Worker, maxThreads> workers_;
 
     void foundGoal(Node* node) {
-        MPT_LOG(INFO) << "found solution";
+        if constexpr (reportStats) {
+            MPT_LOG(INFO) << "found solution with cost " << node->cost();
+        }
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
             goals_.push_front(node);
+            bestCost_ = std::fmin(bestCost_, node->cost());
+            resultWithTime_.push_back({std::chrono::duration_cast<std::chrono::duration<float>>(snp::Clock::now() - start_time_).count(), node->cost()});
         }
+
         ++goalCount_;
 
         bestDist_ = 0.0;
@@ -175,6 +164,8 @@ class NeedleSpreadingPRCS : public
         MPT_LOG(TRACE) << "Using nearest: " << log::type_name<NNStrategy>();
         MPT_LOG(TRACE) << "Using concurrency: " << log::type_name<NNConcurrency>();
         MPT_LOG(TRACE) << "Using sampler: " << log::type_name<Sampler>();
+
+        MPT_LOG(INFO) << "Using planner: " << "NeedleSpreadingPRCS";
     }
 
     void setAddStartRatio(Distance ratio) {
@@ -210,6 +201,7 @@ class NeedleSpreadingPRCS : public
         std::lock_guard<std::mutex> lock(mutex_);
         Node* node = startNodes_.allocate(Traj{}, nullptr, std::forward<Args>(args)...);
         node->valid() = true;
+        node->state().rotation().normalize();
         nn_.insert(NNNode(node, node->state()));
         queue_.push(node);
     }
@@ -224,6 +216,7 @@ class NeedleSpreadingPRCS : public
             throw std::runtime_error("there are no valid initial states");
         }
 
+        start_time_ = snp::Clock::now();
         workers_.solve(*this, doneFn);
     }
 
@@ -401,6 +394,10 @@ class NeedleSpreadingPRCS : public
         return costs;
     }
 
+    const ResultSeq& resultWithTime() const {
+        return resultWithTime_;
+    }
+
   private:
     template <typename Visitor, typename Nodes>
     void visitNodes(Visitor&& visitor, const Nodes& nodes) const {
@@ -488,11 +485,20 @@ class NeedleSpreadingPRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
         if(no_ == 0 && planner.addStartRatio_ > 0) {
             scaledRatio = planner.addStartRatio_ * planner.workers_.size();
             MPT_LOG(TRACE) << "using scaled add start ratio of " << scaledRatio;
+
+            scenario_.validator().InitHEALPix();
         }
 
         configTolerance_ = scenario_.validator().ConfigTolerance();
         initNum_ = planner.propagator_.InitialNumberofOrientations();
         radList_ = planner.propagator_.RadCurvList();
+
+        if (no_ > 0) {
+            auto const startQueueSize = no_;
+            while (!done() && planner.queue_.size() < startQueueSize) {
+                std::lock_guard<std::mutex> lock(planner.startMutex_);
+            }
+        }
 
         while (!done()) {
             if (no_ == 0 && uniform01(rng_) < scaledRatio) {
@@ -536,11 +542,11 @@ class NeedleSpreadingPRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
     }
 
     bool addNewStart(Planner& planner) {
-        auto [success, startState] = scenario_.DirectConnectingStart(csampler_(rng_));
+        auto startState = scenario_.validator().IterateNextStart();
 
-        if (success) {
-            if (!similarStart(planner, startState)) {
-                planner.addStart(startState);
+        if (startState) {
+            if (!similarStart(planner, *startState)) {
+                planner.addStart(*startState);
                 return true;
             }
         }
@@ -552,8 +558,6 @@ class NeedleSpreadingPRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
         State from = node->state();
 
         if (node->parent()) {
-            node->length() = node->parent()->length() + planner.propagator_.Length(node->lengthIndex());
-
             from = planner.propagator_.ComputeStartPose(node->parent()->state(), node->angleIndex());
             auto duplicatedStart = similarStart(planner, node->parent(), from);
 
@@ -570,23 +574,29 @@ class NeedleSpreadingPRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
             }
 
             node->state() = *propagated;
+            node->length() = node->parent()->length() + planner.propagator_.Length(node->lengthIndex());
+            node->cost() = node->parent()->cost() + scenario_.CurveCost(node->parent()->state(), node->state());
         }
 
+        const bool inheritValidation = node->valid();
         if (validNode(planner, node)) {
             if (auto traj = validMotion(planner, node, from)) {
                 auto [isGoal, goalDist, goalState] = scenario_goal<Scenario>::check(scenario_, node->state());
 
                 if (isGoal) {
-                    const Distance& goalLength = node->length() + snp::CurveLength(node->state(), goalState);
+                    auto const& goalLength = node->length() + snp::CurveLength(node->state(), goalState);
 
                     if (scenario_.valid(goalLength)) {
+                        auto const& goalCost = node->cost() + scenario_.CurveCost(node->state(), goalState)
+                                             + scenario_.FinalStateCost(goalState);
                         Node* goalNode = nodePool_.allocate(linkTrajectory(traj), node, goalState);
                         goalNode->length() = goalLength;
+                        goalNode->cost() = goalCost;
                         planner.foundGoal(goalNode);
                     }
                 }
                 else if (!planner.solved() && goalDist < bestDist_) {
-                    const Distance& goalLength = node->length() + snp::CurveLength(node->state(), goalState);
+                    auto const& goalLength = node->length() + snp::CurveLength(node->state(), goalState);
 
                     if (scenario_.valid(goalLength)) {
                         bestDist_ = goalDist;
@@ -594,6 +604,8 @@ class NeedleSpreadingPRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
 
                         if (goalNode) {
                             (*goalNode)->length() = goalLength;
+                            (*goalNode)->cost() = node->cost() + scenario_.CurveCost(node->state(), goalState)
+                                                + scenario_.FinalStateCost(goalState);
                         }
                     }
                 }
@@ -611,7 +623,10 @@ class NeedleSpreadingPRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
                     shorter->valid() = true;
                 }
 
-                refine(planner, node, LONGER);
+                auto longer = refine(planner, node, LONGER);
+                if (inheritValidation && longer) {
+                    longer->valid() = true;
+                }
             }
 
             refine(planner, node, LEFT);
@@ -627,20 +642,19 @@ class NeedleSpreadingPRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
         Timer timer(Stats::nearest());
         std::vector<std::pair<NNNode, Distance>> nbh;
         from.rotation().normalize();
-        planner.nn_.nearest(nbh, from, 2, configTolerance_);
+        planner.nn_.nearest(nbh, from, nbh.max_size(), configTolerance_);
 
-        bool skip_insertion = false;
-
-        for (const auto& n : nbh) {
+        bool skipInsertion = false;
+        for (auto const& n : nbh) {
             if (n.first.node != parent) {
                 return true;
             }
             else {
-                skip_insertion = true;
+                skipInsertion = true;
             }
         }
 
-        if (!skip_insertion) {
+        if (!skipInsertion) {
             planner.nn_.insert(NNNode(parent, from));
         }
 
@@ -661,17 +675,22 @@ class NeedleSpreadingPRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
 
     decltype(auto) validNode(Planner& planner, Node* node) {
         if (!scenario_.valid(node->length())) {
+            node->valid() = false;
             return false;
         }
-
-        if (!scenario_.valid(node->state())) {
-            return false;
+        else if (node->valid()) {
+            return true;
         }
 
         if (node->parent()
-                && node->angleIndex() == 0
-                && node->radIndex() == node->parent()->radIndex()
-                && node->parent()->lengthIndex() > 0) {
+            && node->angleIndex() == 0
+            && node->radIndex() == node->parent()->radIndex()
+            && node->parent()->lengthIndex() > 0)
+        {
+            return false;
+        }
+
+        if (!scenario_.valid(node->state(), node->length())) {
             return false;
         }
 
@@ -679,30 +698,34 @@ class NeedleSpreadingPRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
     }
 
     decltype(auto) validMotion(Planner& planner, Node* node, const State& from) {
-        Timer timer(Stats::validMotion());
-
         if (node->valid()) {
             return true;
         }
 
-        const auto& baseMotion = planner.propagator_.BaseMotion(node->radIndex(), node->lengthIndex());
+        Timer timer(Stats::validMotion());
+        auto const& lengthIdx = node->lengthIndex();
+        auto const& baseMotion = planner.propagator_.BaseMotion(node->radIndex(), lengthIdx);
 
-        if (scenario_.validator().ValidMotion(from, baseMotion)) {
+        unsigned offset = 0;
+        if (lengthIdx > 0 && lengthIdx % 2 == 0) {
+            offset = planner.propagator_.BaseMotion(node->radIndex(), lengthIdx/2).size();
+        }
+
+        if (scenario_.validator().ValidMotion(from, baseMotion, offset)) {
             node->valid() = true;
             return true;
         }
 
-        node->valid() = false;
         return false;
     }
 
     void expand(Planner& planner, Node* node) {
-        for (unsigned r_i = 0; r_i < radList_.size(); ++ r_i) {
+        for (auto r_i = 0; r_i < radList_.size(); ++ r_i) {
             if (radList_[r_i] == std::numeric_limits<Distance>::infinity()) {
                 addNewNode(planner, node, r_i, 0, 0);
             }
             else {
-                for (unsigned a_idx = 0; a_idx < initNum_; ++a_idx) {
+                for (auto a_idx = 0; a_idx < initNum_; ++a_idx) {
                     addNewNode(planner, node, r_i, 0, 0, 0, a_idx);
                 }
             }
@@ -711,7 +734,7 @@ class NeedleSpreadingPRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
 
     Node* refine(Planner& planner, Node* node, const RefineType& type) {
         if (!node->parent()) {
-            throw std::runtime_error("cannot compute finer motion for the root!");
+            throw std::runtime_error("[ERROR] Cannot compute finer motion for the root!");
         }
 
         if (type == SHORTER || type == LONGER) {
@@ -738,7 +761,7 @@ class NeedleSpreadingPRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
                 newIndices[1] += 1;
             }
             else {
-                newIndices[1] *=2;
+                newIndices[1] = newIndices[1] * 2 + 1;
             }
 
             newLevels[0]++;
@@ -750,8 +773,8 @@ class NeedleSpreadingPRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
                 return nullptr;
             }
 
+            newIndices[1] *= 2;
             newLevels[0]++;
-            newIndices[1] = newIndices[1] * 2 + 1;
             break;
         }
 
@@ -760,7 +783,7 @@ class NeedleSpreadingPRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
                 newIndices[2] += initNum_;
             }
             else {
-                newIndices[2] *=2;
+                newIndices[2] *= 2;
             }
 
             newLevels[1]++;
@@ -772,8 +795,8 @@ class NeedleSpreadingPRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
                 return nullptr;
             }
 
-            newLevels[1]++;
             newIndices[2] = newIndices[2] * 2 + 1;
+            newLevels[1]++;
             break;
         }
         }
@@ -786,8 +809,7 @@ class NeedleSpreadingPRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
                           newIndices[1], newIndices[2]);
     }
 
-    Node* addNewNode(Planner& planner, Node* parent, const unsigned& radIndex,
-                     const unsigned& lengthLevel,
+    Node* addNewNode(Planner& planner, Node* parent, const unsigned& radIndex, const unsigned& lengthLevel,
                      const unsigned& angleLevel, const unsigned& lengthIndex=0, const unsigned& angleIndex=0) {
         Node* node;
 
@@ -810,6 +832,6 @@ class NeedleSpreadingPRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
     }
 };
 
-}
+} // namespace unc::robotics::mpt::impl::prcs
 
-#endif
+#endif // SNP_NEEDLE_SPREADING_PRCS_IMPL_H

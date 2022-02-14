@@ -95,6 +95,4 @@ include_directories(BEFORE "${CMAKE_CURRENT_BINARY_DIR}/external/nigh/src")
 include_directories(BEFORE "external/mpt/src")
 include_directories(BEFORE "${CMAKE_CURRENT_BINARY_DIR}/external/mpt/src")
 
-add_subdirectory(src)
-
 add_subdirectory(app)

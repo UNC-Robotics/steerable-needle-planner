@@ -30,12 +30,10 @@
 
 //! @author Mengyu Fu
 
-#include "image_environment.h"
-
 #include <iostream>
 #include <fstream>
 
-#include "utils.h"
+#include "needle_utils.h"
 
 namespace unc::robotics::snp {
 
@@ -46,7 +44,7 @@ ImageEnvironment::ImageEnvironment(const Affine& ijk_to_ras) {
 ImageEnvironment::~ImageEnvironment() {
     cost_array_.resize(boost::extents[0][0][0]);
 
-    for (const auto& [name, nn] : all_nns_) {
+    for (auto const& [name, nn] : all_nns_) {
         if (nn.second) {
             delete nn.second;
         }
@@ -73,6 +71,7 @@ void ImageEnvironment::SetImageSize(const Idx size_x, const Idx size_y, const Id
     image_size_[2] = size_z;
 
     cost_array_.resize(boost::extents[size_x][size_y][size_z]);
+    workspace_.resize(boost::extents[size_x][size_y][size_z]);
 }
 
 IdxPoint ImageEnvironment::ImageSize() const {
@@ -135,7 +134,7 @@ bool ImageEnvironment::DisableNN(const Str image_name) {
 std::vector<Str> ImageEnvironment::ListAllNN() const {
     std::vector<Str> names;
 
-    for (const auto& [name, nn] : all_nns_) {
+    for (auto const& [name, nn] : all_nns_) {
         names.push_back(name);
     }
 
@@ -145,7 +144,7 @@ std::vector<Str> ImageEnvironment::ListAllNN() const {
 std::vector<Str> ImageEnvironment::ListActiveNN() const {
     std::vector<Str> names;
 
-    for (const auto& [name, nn] : all_nns_) {
+    for (auto const& [name, nn] : all_nns_) {
         if (nn.first) {
             names.push_back(name);
         }
@@ -169,11 +168,11 @@ bool ImageEnvironment::ConstructEnvironmentFromFile(const Str file_name) {
     Str line;
     Affine ijk_to_ras;
 
-    for (unsigned i = 0; i < 4; ++i) {
+    for (auto i = 0; i < 4; ++i) {
         if (std::getline(fin, line)) {
             std::istringstream s(line);
 
-            for (unsigned j = 0; j < 4; ++j) {
+            for (auto j = 0; j < 4; ++j) {
                 s >> ijk_to_ras(i, j);
             }
         }
@@ -190,7 +189,7 @@ bool ImageEnvironment::ConstructEnvironmentFromFile(const Str file_name) {
     if (std::getline(fin, line)) {
         std::istringstream s(line);
 
-        for (unsigned i = 0; i < 3; ++i) {
+        for (auto i = 0; i < 3; ++i) {
             s >> size[i];
         }
     }
@@ -207,7 +206,7 @@ bool ImageEnvironment::ConstructEnvironmentFromFile(const Str file_name) {
     while (std::getline(fin, line)) {
         std::istringstream s(line);
 
-        for (unsigned i = 0; i < 3; ++i) {
+        for (auto i = 0; i < 3; ++i) {
             s >> obs[i];
         }
 
@@ -235,7 +234,7 @@ bool ImageEnvironment::ConstructCostFromFile(const Str file_name) {
     while (std::getline(fin, line)) {
         std::istringstream s(line);
 
-        for (unsigned i = 0; i < 3; ++i) {
+        for (auto i = 0; i < 3; ++i) {
             s >> obs[i];
         }
 
@@ -296,7 +295,7 @@ void ImageEnvironment::AddObstacle(const IdxPoint& p, const Str& image_name) {
         throw std::runtime_error("Trying to add an obstacle outside the image region.");
     }
 
-    Vec3 ras_p = this->IjkToRas(p);
+    auto ras_p = this->IjkToRas(p);
     this->AddObstacle(ras_p, image_name);
 }
 
@@ -345,7 +344,7 @@ std::pair<Vec3, RealNum> ImageEnvironment::NearestObstacleCenter(const Vec3& p) 
     RealNum min_dist = R_INF;
     Vec3 point(0, 0, 0);
 
-    for (const auto& [name, nn] : all_nns_) {
+    for (auto const& [name, nn] : all_nns_) {
         if (nn.first) {
             auto p_nearest = nn.second->nearest(p);
 
@@ -438,7 +437,7 @@ void ImageEnvironment::SetWhiteList(bool flag) {
 }
 
 bool ImageEnvironment::InWhiteListArea(const Vec3& p) const {
-    for (const auto& ball : white_list_) {
+    for (const auto ball : white_list_) {
         if ((p - ball.first).norm() < ball.second) {
             return true;
         }
@@ -457,7 +456,7 @@ RealNum ImageEnvironment::PointCost(const Vec3& p) const {
 
 RealNum ImageEnvironment::PointCost(const Vec3& p, const CostType cost_type) const {
     if (!this->WithinImage(p)) {
-        throw std::runtime_error("Trying to query the cost of a point outside the image.");
+        return out_of_image_cost_;
     }
 
     if (cost_type == NO_COST || cost_type == GOAL_ORIENTATION) {
@@ -469,17 +468,65 @@ RealNum ImageEnvironment::PointCost(const Vec3& p, const CostType cost_type) con
     }
 
     if (cost_type == COST_MAP) {
-        IdxPoint idx = this->RasToIjk(p);
+        if (use_trilinear_interpolation_) {
+            return std::max(min_cost_, TrilinearInterpolatedCostFromMap(p));
+        }
 
-        return cost_array_[idx[0]][idx[1]][idx[2]];
+        IdxPoint idx = this->RasToIjk(p);
+        return std::max(min_cost_, cost_array_[idx[0]][idx[1]][idx[2]]);
     }
 
     if (cost_type == DIST_TO_OBS) {
-        RealNum dist = this->DistanceToObstacleCenter(p);
-        return 1.0/dist;
+        auto dist = this->DistanceToObstacleCenter(p);
+        return 1.0 / std::max(delta_, dist - min_dist_to_obs_);
     }
 
     return 0;
+}
+
+RealNum ImageEnvironment::TrilinearInterpolatedCostFromMap(const Vec3& p) const {
+    const IdxPoint nearest = this->RasToIjk(p);
+    const Vec3 nearest_ras = this->IjkToRas(nearest);
+
+    int dx, dy, dz;
+    dx = (p[0] - nearest_ras[0]) * ijk_to_ras_(0, 0) > 0 ? 1 : -1;
+    dy = (p[1] - nearest_ras[1]) * ijk_to_ras_(1, 1) > 0 ? 1 : -1;
+    dz = (p[2] - nearest_ras[2]) * ijk_to_ras_(2, 2) > 0 ? 1 : -1;
+
+    IntPoint tmp;
+    std::vector<RealNum> neig;
+    for (int x = 0; x < 2; ++x) {
+        tmp[0] = nearest[0] + x*dx;
+        for (int y = 0; y < 2; ++y) {
+            tmp[1] = nearest[1] + y*dy;
+            for (int z = 0; z < 2; ++z) {
+                tmp[2] = nearest[2] + z*dz;
+
+                if (tmp[0] < 0 || tmp[1] < 0 || tmp[2] < 0
+                    || tmp[0] >= image_size_[0] || tmp[1] >= image_size_[1] || tmp[2] >= image_size_[2]) 
+                {
+                    neig.push_back(out_of_image_cost_);
+                }
+                else {
+                    neig.push_back(cost_array_[tmp[0]][tmp[1]][tmp[2]]);
+                }
+            }
+        }
+    }
+
+    RealNum x_d = (p[0] - nearest_ras[0])/(dx * ijk_to_ras_(0, 0));
+    RealNum y_d = (p[1] - nearest_ras[1])/(dy * ijk_to_ras_(1, 1));
+    RealNum z_d = (p[2] - nearest_ras[2])/(dz * ijk_to_ras_(2, 2));
+
+    RealNum c_00 = neig[0] * (1 - dx) + neig[4] * x_d;
+    RealNum c_01 = neig[1] * (1 - dx) + neig[5] * x_d;
+    RealNum c_10 = neig[2] * (1 - dx) + neig[6] * x_d;
+    RealNum c_11 = neig[3] * (1 - dx) + neig[7] * x_d;
+
+    RealNum c_0 = c_00 * (1 - y_d) + c_10 * y_d;
+    RealNum c_1 = c_01 * (1 - y_d) + c_11 * y_d;
+
+    return c_0 * (1 - z_d) + c_1 * z_d;
 }
 
 RealNum ImageEnvironment::CostInCostMap(const Vec3& p) const {
@@ -493,30 +540,64 @@ RealNum ImageEnvironment::CostInCostMap(const Vec3& p) const {
 
 void ImageEnvironment::SetCostType(const CostType type) {
     cost_type_ = type;
+
+    switch (type) {
+        case NO_COST: {
+            min_cost_ = 0.0;
+            cost_k_ = 1.0;
+            break;
+        }
+
+        case PATH_LENGTH: {
+            min_cost_ = 1.0;
+            cost_k_ = 1.0;
+            break;
+        }
+
+        case COST_MAP: {
+            min_cost_ = 0.01;
+            auto min_size = std::min(std::min(ijk_to_ras_(0, 0),
+                                              ijk_to_ras_(1, 1)),
+                                              ijk_to_ras_(2, 2));
+            cost_k_ = (1.0 / min_size + 1.0) / min_cost_;
+            break;
+        }
+
+        case DIST_TO_OBS: {
+            min_cost_ = 0.01;
+            cost_k_ = (1.0 / (delta_ * delta_) + 1.0 / delta_) / min_cost_;
+            break;
+        }
+
+        case GOAL_ORIENTATION: {
+            min_cost_ = 0.0;
+            cost_k_ = -1;
+            break;
+        }
+    }
 }
 
 Str ImageEnvironment::CostTypeString() {
     switch (cost_type_) {
-    case NO_COST: {
-        return "NO_COST";
-    }
+        case NO_COST: {
+            return "NO_COST";
+        }
 
-    case PATH_LENGTH: {
-        return "PATH_LENGTH";
-    }
+        case PATH_LENGTH: {
+            return "PATH_LENGTH";
+        }
 
-    case COST_MAP: {
-        return "IMAGE_COST_MAP";
-    }
+        case COST_MAP: {
+            return "IMAGE_COST_MAP";
+        }
 
-    case DIST_TO_OBS: {
-        return "DISTANCE_TO_OBSTACLES";
-    }
+        case DIST_TO_OBS: {
+            return "DISTANCE_TO_OBSTACLES";
+        }
 
-    case GOAL_ORIENTATION: {
-        return "GOAL_ORIENTATION_DIFFERENCE";
-        break;
-    }
+        case GOAL_ORIENTATION: {
+            return "GOAL_ORIENTATION_DIFFERENCE";
+        }
     }
 
     return "NOT_DEFINED!!!";
@@ -533,37 +614,38 @@ RealNum ImageEnvironment::CurveCost(const Vec3& sp, const Quat& sq, const Vec3& 
 
 RealNum ImageEnvironment::CurveCost(const Vec3& sp, const Quat& sq, const Vec3& gp, const Quat& gq,
                                     const RealNum rad, const RealNum resolution, const CostType cost_type) const {
-    RealNum curve_cost;
+    RealNum curve_cost = 0;
 
     switch (cost_type) {
-    case NO_COST: {
-        curve_cost = 0;
-        break;
-    }
-
-    case PATH_LENGTH: {
-        curve_cost = CurveLength(sp, sq, gp, gq);
-        break;
-    }
-
-    case GOAL_ORIENTATION: {
-        curve_cost = 0;
-        break;
-    }
-
-    default: {
-        RealNum avg_cost = PointCost(sp) + PointCost(gp);
-        const auto pairs = Interpolate(sp, sq, gp, gq, rad, resolution);
-
-        for (const auto& pair : pairs) {
-            avg_cost += PointCost(pair.translation());
+        case NO_COST: {
+            curve_cost = 0;
+            break;
         }
 
-        avg_cost /= pairs.size() + 2;
+        case PATH_LENGTH: {
+            curve_cost = CurveLength(sp, sq, gp, gq);
+            break;
+        }
 
-        curve_cost = avg_cost*CurveLength(sp, sq, gp, gq);
-        break;
-    }
+        case GOAL_ORIENTATION: {
+            curve_cost = 0;
+            break;
+        }
+
+        default: {
+            auto avg_cost = PointCost(sp) + PointCost(gp);
+            using Se3State = unc::robotics::mpt::SE3State<RealNum>;
+            const auto pairs = Interpolate<Se3State>(sp, sq, gp, gq, rad, resolution);
+
+            for (const auto& pair : pairs) {
+                avg_cost += PointCost(pair.translation());
+            }
+
+            avg_cost /= pairs.size() + 2;
+
+            curve_cost = avg_cost*CurveLength(sp, sq, gp, gq);
+            break;
+        }
     }
 
     if (std::isnan(curve_cost)) {
@@ -603,7 +685,7 @@ bool ImageEnvironment::CollisionFree(const Vec3& p) const {
         return !this->IsObstacle(p);
     }
 
-    for (const auto& [name, nn] : all_nns_) {
+    for (auto const& [name, nn] : all_nns_) {
         if (nn.first) {
             auto p_nearest = nn.second->nearest(p);
 
@@ -621,7 +703,7 @@ bool ImageEnvironment::CollisionFree(const Vec3& p) const {
 
                 nn.second->nearest(nbh, p, search->second, min_dist_to_obs_);
 
-                for (const auto& n : nbh) {
+                for (auto n : nbh) {
                     if (!this->InWhiteListArea(n.first.point)) {
                         return false;
                     }
@@ -670,7 +752,7 @@ bool ImageEnvironment::CollisionFree(const Vec3& p, const Str& image_name) const
 
         nn.second->nearest(nbh, p, search_idx->second, min_dist_to_obs_);
 
-        for (const auto& n : nbh) {
+        for (auto n : nbh) {
             if (!this->InWhiteListArea(n.first.point)) {
                 return false;
             }
@@ -716,7 +798,7 @@ void ImageEnvironment::SaveRasPtc(const Str& file_name) const {
 
     SizeType count = 0;
 
-    for (const auto& [name, nn] : all_nns_) {
+    for (auto const& [name, nn] : all_nns_) {
         auto ptc = nn.second->list();
 
         for (const auto& p : ptc) {
@@ -731,4 +813,28 @@ void ImageEnvironment::SaveRasPtc(const Str& file_name) const {
     std::cout << "Saved " << count << " points to " << file_name << std::endl;
 }
 
+void ImageEnvironment::EnableTrilinearInterpolation(const bool enable) {
+    use_trilinear_interpolation_ = enable;
 }
+
+RealNum ImageEnvironment::MinCost() const {
+    return min_cost_;
+}
+
+RealNum ImageEnvironment::CostK() const {
+    return cost_k_;
+}
+
+void ImageEnvironment::SetWorkspace(const bool value) {
+    std::fill(workspace_.data(), workspace_.data() + workspace_.num_elements(), value);
+}
+
+void ImageEnvironment::SetWorkspace(const Idx& x, const Idx& y, const Idx& z, const bool value) {
+    workspace_[x][y][z] = value;
+}
+
+bool ImageEnvironment::Workspace(const Idx& x, const Idx& y, const Idx& z) const {
+    return workspace_[x][y][z];
+}
+
+} // namespace unc::robotics::snp

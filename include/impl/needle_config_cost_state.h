@@ -1,4 +1,4 @@
-// BSD 3-Clause License
+/// BSD 3-Clause License
 
 // Copyright (c) 2021, The University of North Carolina at Chapel Hill
 // All rights reserved.
@@ -31,19 +31,67 @@
 //! @author Mengyu Fu
 
 #pragma once
-#ifndef SNP_NEEDLE_PLANNER_MODE
-#define SNP_NEEDLE_PLANNER_MODE
+#ifndef SNP_CONFIG_COST_STATE_H
+#define SNP_CONFIG_COST_STATE_H
+
+#include <Eigen/Dense>
 
 namespace unc::robotics::mpt {
 
-struct spreading {};
-struct optimal {};
+template <typename Scalar>
+class ConfigCostState {
+    using Base = std::pair<std::tuple<Eigen::Quaternion<Scalar>, Eigen::Matrix<Scalar, 3, 1>>, Scalar>;
+    Base base_;
 
-struct point2point_planner {};
-struct spreading_planner {};
-struct point2point_optimal_planner {};
-struct spreading_optimal_planner {};
+  public:
+    using Distance = Scalar;
+
+    ConfigCostState() = default;
+
+    ConfigCostState(const Eigen::Quaternion<Scalar>& q, const Eigen::Matrix<Scalar, 3, 1>& p) {
+        base_.first = {q, p};
+        base_.second = 0;
+    }
+
+    ConfigCostState(const Eigen::Quaternion<Scalar>& q, const Eigen::Matrix<Scalar, 3, 1>& p, const Scalar& c) {
+        base_.first = {q, p};
+        base_.second = c;
+    }
+
+    Eigen::Quaternion<Scalar>& rotation() {
+        return std::get<0>(base_.first);
+    }
+
+    const Eigen::Quaternion<Scalar>& rotation() const {
+        return std::get<0>(base_.first);
+    }
+
+    Eigen::Matrix<Scalar, 3, 1>& translation() {
+        return std::get<1>(base_.first);
+    }
+
+    const Eigen::Matrix<Scalar, 3, 1>& translation() const {
+        return std::get<1>(base_.first);
+    }
+
+    Scalar& cost() {
+        return base_.second;
+    }
+
+    const Scalar& cost() const {
+        return base_.second;
+    }
+
+    template <typename Char, typename Traits>
+    friend decltype(auto)
+    operator << (std::basic_ostream<Char, Traits>& out, const ConfigCostState& q) {
+        return out << "{t=[" << q.translation().transpose()
+                   << "], r=[" << q.rotation().coeffs().transpose()
+                   << "], c=[" << q.cost()
+                   << "]}";
+    }
+};
 
 } // namespace unc::robotics::mpt
 
-#endif // SNP_NEEDLE_PLANNER_MODE
+#endif // SNP_CONFIG_COST_STATE_H

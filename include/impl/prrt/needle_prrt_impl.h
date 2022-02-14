@@ -1,131 +1,59 @@
-// Software License Agreement (BSD-3-Clause)
-//
-// Copyright 2018 The University of North Carolina at Chapel Hill
-//
+// BSD 3-Clause License
+
+// Copyright (c) 2021, The University of North Carolina at Chapel Hill
+// All rights reserved.
+
 // Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions
-// are met:
-//
-// 1. Redistributions of source code must retain the above copyright
-//    notice, this list of conditions and the following disclaimer.
-//
-// 2. Redistributions in binary form must reproduce the above
-//    copyright notice, this list of conditions and the following
-//    disclaimer in the documentation and/or other materials provided
-//    with the distribution.
-//
+// modification, are permitted provided that the following conditions are met:
+
+// 1. Redistributions of source code must retain the above copyright notice, this
+//    list of conditions and the following disclaimer.
+
+// 2. Redistributions in binary form must reproduce the above copyright notice,
+//    this list of conditions and the following disclaimer in the documentation
+//    and/or other materials provided with the distribution.
+
 // 3. Neither the name of the copyright holder nor the names of its
-//    contributors may be used to endorse or promote products derived
-//    from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
-// FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
-// COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
-// INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-// (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-// SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
-// STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
-// OF THE POSSIBILITY OF SUCH DAMAGE.
+//    contributors may be used to endorse or promote products derived from
+//    this software without specific prior written permission.
+
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+// DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+// SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+// OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //! @author Jeff Ichnowski
 
 #pragma once
-#ifndef MPT_IMPL_PRCS_PLANNER_HPP
-#define MPT_IMPL_PRCS_PLANNER_HPP
+#ifndef SNP_NEEDLE_PRRT_IMPL_H
+#define SNP_NEEDLE_PRRT_IMPL_H
 
-#include "edge.hpp"
-#include "node.hpp"
+#include "prrt_base.hpp"
 
-#include <mpt/impl/atom.hpp>
-#include <mpt/impl/goal_has_sampler.hpp>
-#include <mpt/impl/link_trajectory.hpp>
-#include <mpt/impl/object_pool.hpp>
-#include <mpt/impl/planner_base.hpp>
-#include <mpt/impl/scenario_goal.hpp>
-#include <mpt/impl/scenario_goal_sampler.hpp>
-#include <mpt/impl/scenario_link.hpp>
-#include <mpt/impl/scenario_rng.hpp>
-#include <mpt/impl/scenario_sampler.hpp>
-#include <mpt/impl/scenario_space.hpp>
-#include <mpt/impl/timer_stat.hpp>
-#include <mpt/impl/worker_pool.hpp>
-#include <mpt/log.hpp>
-#include <mpt/random_device_seed.hpp>
-#include <forward_list>
-#include <mutex>
-#include <utility>
-
-namespace unc::robotics::mpt::impl::prcs {
-
-template <bool enable>
-struct WorkerStats;
-
-template <>
-struct WorkerStats<false> {
-    void countIteration() const {}
-    void countAddedStart() const {}
-    auto& validMotion() {
-        return TimerStat<void>::instance();
-    }
-    auto& nearest() {
-        return TimerStat<void>::instance();
-    }
-};
-
-template <>
-struct WorkerStats<true> {
-    mutable std::size_t iterations_{0};
-    mutable std::size_t addedStart_{0};
-    mutable TimerStat<> validMotion_;
-    mutable TimerStat<> nearest_;
-
-    void countIteration() const {
-        ++iterations_;
-    }
-    void countAddedStart() const {
-        ++addedStart_;
-    }
-
-    TimerStat<>& validMotion() const {
-        return validMotion_;
-    }
-    TimerStat<>& nearest() const {
-        return nearest_;
-    }
-
-    WorkerStats& operator += (const WorkerStats& other) {
-        iterations_ += other.iterations_;
-        addedStart_ += other.addedStart_;
-        validMotion_ += other.validMotion_;
-        nearest_ += other.nearest_;
-        return *this;
-    }
-
-    void print() const {
-        MPT_LOG(INFO) << "iterations: " << iterations_;
-        MPT_LOG(INFO) << "added start states: " << addedStart_;
-        MPT_LOG(INFO) << "valid motion: " << validMotion_;
-        MPT_LOG(INFO) << "nearest: " << nearest_;
-    }
-};
-
+namespace unc::robotics::mpt::impl::prrt {
 template <typename Scenario, int maxThreads, bool reportStats, typename NNStrategy>
-class PRCS : public PlannerBase<PRCS<Scenario, maxThreads, reportStats, NNStrategy>> {
-    using Planner = PRCS;
-    using Base = PlannerBase<Planner>;
+class NeedlePRRT : public PlannerBase<NeedlePRRT<Scenario, maxThreads, reportStats, NNStrategy>> {
+  public:
     using Space = scenario_space_t<Scenario>;
     using State = typename Space::Type;
+
+  private:
+    using Planner = NeedlePRRT;
+    using Base = PlannerBase<Planner>;
     using Distance = typename Space::Distance;
     using Link = scenario_link_t<Scenario>;
     using Traj = link_trajectory_t<Link>;
-    using Node = prcs::Node<State, Traj>;
-    using Edge = prcs::Edge<State, Traj>;
+    using Node = prrt::Node<State, Traj>;
+    using Edge = prrt::Edge<State, Traj>;
     using RNG = scenario_rng_t<Scenario, Distance>;
     using Sampler = scenario_sampler_t<Scenario, RNG>;
+    using Point = typename Scenario::Position;
 
     Distance maxDistance_{std::numeric_limits<Distance>::infinity()};
     Distance goalBias_{0.01};
@@ -136,6 +64,13 @@ class PRCS : public PlannerBase<PRCS<Scenario, maxThreads, reportStats, NNStrate
 
     std::mutex mutex_;
     std::forward_list<Node*> goals_;
+    Distance bestCost_{std::numeric_limits<Distance>::infinity()};
+    snp::TimePoint start_time_;
+    using ResultSeq = std::vector<std::pair<float, Distance>>;
+    ResultSeq resultWithTime_;
+
+    Node* approxRes_{nullptr};
+    Distance bestDist_{std::numeric_limits<Distance>::infinity()};
 
     Atom<std::size_t, concurrent> goalCount_{0};
 
@@ -146,22 +81,52 @@ class PRCS : public PlannerBase<PRCS<Scenario, maxThreads, reportStats, NNStrate
     WorkerPool<Worker, maxThreads> workers_;
 
     void foundGoal(Node* node) {
-        MPT_LOG(INFO) << "found solution";
+        if constexpr (reportStats) {
+            MPT_LOG(INFO) << "found solution with cost " << node->cost();
+        }
+
         {
             std::lock_guard<std::mutex> lock(mutex_);
             goals_.push_front(node);
+            bestCost_ = std::fmin(bestCost_, node->cost());
+            resultWithTime_.push_back({std::chrono::duration_cast<std::chrono::duration<float>>(snp::Clock::now() - start_time_).count(),
+                                         node->cost()});
         }
+
         ++goalCount_;
+
+        bestDist_ = 0.0;
+    }
+
+    std::optional<Node*> foundApproxGoal(Node* node, const State& goalState, ObjectPool<Node>& nodePool,
+                                         Distance* dist) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+
+            if (*dist < bestDist_) {
+                MPT_LOG(INFO) << "update approximate solution with dist " << *dist;
+                bestDist_ = *dist;
+                approxRes_ = nodePool.allocate(linkTrajectory(true), node, goalState);
+                return approxRes_;
+            }
+            else if (*dist > bestDist_) {
+                *dist = bestDist_;
+            }
+        }
+
+        return {};
     }
 
   public:
     template <typename RNGSeed = RandomDeviceSeed<>>
-    explicit PRCS(const Scenario& scenario = Scenario(), const RNGSeed& seed = RNGSeed())
+    explicit NeedlePRRT(const Scenario& scenario = Scenario(), const RNGSeed& seed = RNGSeed())
         : nn_(scenario.space())
         , workers_(scenario, seed) {
         MPT_LOG(TRACE) << "Using nearest: " << log::type_name<NNStrategy>();
         MPT_LOG(TRACE) << "Using concurrency: " << log::type_name<NNConcurrency>();
         MPT_LOG(TRACE) << "Using sampler: " << log::type_name<Sampler>();
+
+        MPT_LOG(INFO) << "Using planner: " << "NeedlePRRT";
     }
 
     void setGoalBias(Distance bias) {
@@ -203,10 +168,19 @@ class PRCS : public PlannerBase<PRCS<Scenario, maxThreads, reportStats, NNStrate
             throw std::runtime_error("there are no valid initial states");
         }
 
+        start_time_ = snp::Clock::now();
         workers_.solve(*this, doneFn);
     }
 
     bool solved() const {
+        return goalCount_.load(std::memory_order_relaxed);
+    }
+
+    bool approxSolved() const {
+        return (approxRes_ != nullptr);
+    }
+
+    std::size_t numPlansFound() const {
         return goalCount_.load(std::memory_order_relaxed);
     }
 
@@ -216,10 +190,11 @@ class PRCS : public PlannerBase<PRCS<Scenario, maxThreads, reportStats, NNStrate
         std::size_t size = 0;
 
         if (n) {
+            cost += workers_[0].scenario().FinalStateCost(n->state());
             ++size;
 
             for (const Node *p ; (p = n->parent()) != nullptr ; n = p) {
-                cost += workers_[0].space().distance(n->state(), p->state());
+                cost += workers_[0].scenario().CurveCost(p->state(), n->state());
                 ++size;
             }
         }
@@ -227,10 +202,19 @@ class PRCS : public PlannerBase<PRCS<Scenario, maxThreads, reportStats, NNStrate
         return {cost, size};
     }
 
-    std::tuple<const Node*, std::size_t, Distance> bestSolution() const {
+    std::tuple<Distance, std::size_t, const Node*> bestSolution() const {
         Distance bestCost = std::numeric_limits<Distance>::infinity();
         std::size_t bestSize = 0;
         const Node* bestGoal = nullptr;
+
+        if (goals_.empty() && approxRes_) {
+            const Node* goal = approxRes_;
+            auto [cost, size] = pathCost(goal);
+            bestCost = cost;
+            bestSize = size;
+            bestGoal = goal;
+            return {bestCost, bestSize, bestGoal};
+        }
 
         for (const Node* goal : goals_) {
             auto [cost, size] = pathCost(goal);
@@ -242,7 +226,7 @@ class PRCS : public PlannerBase<PRCS<Scenario, maxThreads, reportStats, NNStrate
             }
         }
 
-        return {bestGoal, bestSize, bestCost};
+        return {bestCost, bestSize, bestGoal};
     }
 
     template <typename Fn>
@@ -275,7 +259,7 @@ class PRCS : public PlannerBase<PRCS<Scenario, maxThreads, reportStats, NNStrate
 
   public:
     std::vector<State> solution() const {
-        auto [n, size, cost] = bestSolution();
+        auto [cost, size, n] = bestSolution();
         std::vector<State> path;
 
         if (n) {
@@ -292,9 +276,33 @@ class PRCS : public PlannerBase<PRCS<Scenario, maxThreads, reportStats, NNStrate
         return path;
     }
 
+    std::vector<std::vector<State>> allSolutions () const {
+        std::vector<std::vector<State>> paths;
+
+        for (const Node* n : goals_) {
+            std::vector<State> path;
+
+            if (n) {
+                auto [cost, size] = pathCost(n);
+                path.reserve(size);
+
+                do {
+                    path.push_back(n->state());
+                }
+                while ((n = n->parent()) != nullptr);
+
+                std::reverse(path.begin(), path.end());
+            }
+
+            paths.push_back(path);
+        }
+
+        return paths;
+    }
+
     template <typename Fn>
     void solution(Fn fn) const {
-        auto [goal, size, cost] = bestSolution();
+        auto [cost, size, goal] = bestSolution();
 
         if (goal) {
             solutionRecur(goal, fn);
@@ -303,7 +311,7 @@ class PRCS : public PlannerBase<PRCS<Scenario, maxThreads, reportStats, NNStrate
 
     void printStats() const {
         MPT_LOG(INFO) << "nodes in graph: " << nn_.size();
-        auto [goal, size, cost] = bestSolution();
+        auto [cost, size, goal] = bestSolution();
         MPT_LOG(INFO) << "solutions: " << goalCount_.load() << ", best cost=" << cost
                       << " over " << size << " waypoints";
 
@@ -316,6 +324,26 @@ class PRCS : public PlannerBase<PRCS<Scenario, maxThreads, reportStats, NNStrate
 
             stats.print();
         }
+    }
+
+    Distance cost() const {
+        auto [cost, size, n] = bestSolution();
+        return cost;
+    }
+
+    std::vector<Distance> allCosts() const {
+        std::vector<Distance> costs;
+
+        for (const Node* n : goals_) {
+            auto [cost, size] = pathCost(n);
+            costs.push_back(cost);
+        }
+
+        return costs;
+    }
+
+    const ResultSeq& resultWithTime() const {
+        return resultWithTime_;
     }
 
   private:
@@ -342,9 +370,11 @@ class PRCS : public PlannerBase<PRCS<Scenario, maxThreads, reportStats, NNStrate
 };
 
 template <typename Scenario, int maxThreads, bool reportStats, typename NNStrategy>
-class PRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
+class NeedlePRRT<Scenario, maxThreads, reportStats, NNStrategy>::Worker
     : public WorkerStats<reportStats> {
     using Stats = WorkerStats<reportStats>;
+    using CSampler = typename Scenario::CSampler;
+    using Propagator = typename Scenario::Propagator;
 
     unsigned no_;
     Scenario scenario_;
@@ -352,23 +382,35 @@ class PRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
 
     ObjectPool<Node> nodePool_;
 
+    CSampler csampler_;
+    Propagator propagator_;
+    Distance bestDist_{std::numeric_limits<Distance>::infinity()};
+
   public:
     Worker(Worker&& other)
         : no_(other.no_)
         , scenario_(other.scenario_)
         , rng_(other.rng_)
-        , nodePool_(std::move(other.nodePool_)) {
+        , nodePool_(std::move(other.nodePool_))
+        , csampler_(scenario_.Config(), scenario_.StartState(), scenario_.GoalState())
+        , propagator_(scenario_.Config()) {
     }
 
     template <typename RNGSeed>
     Worker(unsigned no, const Scenario& scenario, const RNGSeed& seed)
         : no_(no)
         , scenario_(scenario)
-        , rng_(seed) {
+        , rng_(seed)
+        , csampler_(scenario.Config(), scenario.StartState(), scenario.GoalState())
+        , propagator_(scenario.Config()) {
     }
 
     decltype(auto) space() const {
         return scenario_.space();
+    }
+
+    decltype(auto) scenario() const {
+        return scenario_;
     }
 
     const auto& nodes() const {
@@ -379,12 +421,11 @@ class PRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
     void solve(Planner& planner, DoneFn done) {
         MPT_LOG(TRACE) << "worker running";
 
-        Sampler sampler(scenario_);
+        std::uniform_real_distribution<Distance> uniform01;
 
         if constexpr (scenario_has_goal_sampler_v<Scenario, RNG>) {
             if (no_ == 0 && planner.goalBias_ > 0) {
                 scenario_goal_sampler_t<Scenario, RNG> goalSampler(scenario_);
-                std::uniform_real_distribution<Distance> uniform01;
 
                 Distance scaledBias = planner.goalBias_ * planner.workers_.size();
 
@@ -397,12 +438,12 @@ class PRCS<Scenario, maxThreads, reportStats, NNStrategy>::Worker
                         goto unbiasedSamplingLoop;
                     }
 
-                    if (uniform01(rng_) < planner.goalBias_) {
+                    if (uniform01(rng_) < scaledBias) {
                         Stats::countBiasedSample();
                         addSample(planner, goalSampler(rng_));
                     }
                     else {
-                        addSample(planner, sampler(rng_));
+                        addSample(planner, csampler_(rng_));
                     }
                 }
 
@@ -414,7 +455,8 @@ unbiasedSamplingLoop:
 
         while (!done()) {
             Stats::countIteration();
-            addSample(planner, sampler(rng_));
+
+            addSample(planner, csampler_(rng_));
         }
 
         MPT_LOG(TRACE) << "worker done";
@@ -432,33 +474,66 @@ unbiasedSamplingLoop:
     }
 
     void addSample(Planner& planner, State& randState) {
+        if (scenario_.collision(randState)) {
+            return;
+        }
+
         auto [nearNode, d] = nearest(planner, randState).value();
 
         State newState = randState;
 
-        if (d == 0) {
+        if (scenario_.PositionDist(nearNode->state(), randState) < snp::EPS) {
             return;
         }
 
-        if (d > planner.maxDistance_)
-            newState = interpolate(
-                           scenario_.space(),
-                           nearNode->state(), randState,
-                           planner.maxDistance_ / d);
+        auto propagated = propagator_(nearNode->state(), randState, rng_);
 
-        if (!scenario_.valid(newState)) {
+        if (!propagated) {
+            return;
+        }
+
+        newState = *propagated;
+
+        auto const& newLength = nearNode->length() + snp::CurveLength(nearNode->state(), newState);
+
+        if (!scenario_.valid(newState, newLength)) {
             return;
         }
 
         if (auto traj = validMotion(nearNode->state(), newState)) {
-            auto [isGoal, goalDist] = scenario_goal<Scenario>::check(scenario_, newState);
-            (void)goalDist;
+            auto [isGoal, goalDist, goalStates] = scenario_goal<Scenario>::check(scenario_, newState);
+            auto const& goalState = goalStates[0];
 
             Node* newNode = nodePool_.allocate(linkTrajectory(traj), nearNode, newState);
+            newNode->length() = newLength;
+            newNode->cost() = nearNode->cost() + scenario_.CurveCost(nearNode->state(), newState);
             planner.nn_.insert(newNode);
 
             if (isGoal) {
-                planner.foundGoal(newNode);
+                auto const& goalLength = newLength + snp::CurveLength(newState, goalState);
+                if (scenario_.valid(goalLength)) {
+                    auto const& goalCost = newNode->cost() + scenario_.CurveCost(newState, goalState)
+                                         + scenario_.FinalStateCost(goalState);
+                    if (goalCost < planner.bestCost_) {
+                        Node* goalNode = nodePool_.allocate(linkTrajectory(traj), newNode, goalState);
+                        goalNode->length() = goalLength;
+                        goalNode->cost() = goalCost;
+                        planner.foundGoal(goalNode);
+                    }
+                }
+            }
+            else if (!planner.solved() && goalDist < bestDist_) {
+                auto const& goalLength = newLength + snp::CurveLength(newState, goalState);
+
+                if (scenario_.valid(goalLength)) {
+                    bestDist_ = goalDist;
+                    auto goalNode = planner.foundApproxGoal(newNode, goalState, nodePool_, &bestDist_);
+                    if (goalNode) {
+                        (*goalNode)->length() = goalLength;
+                        (*goalNode)->cost() = newNode->cost() + scenario_.CurveCost(newNode->state(), goalState)
+                                              + scenario_.FinalStateCost(goalState);
+                    }
+                }
             }
         }
     }
@@ -468,6 +543,7 @@ unbiasedSamplingLoop:
         return scenario_.link(a, b);
     }
 };
-}
 
-#endif
+} // namespace unc::robotics::mpt::impl::prrt
+
+#endif // SNP_NEEDLE_PRRT_IMPL_H

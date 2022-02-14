@@ -31,62 +31,114 @@
 //! @author Mengyu Fu
 
 #pragma once
-#ifndef MPT_IMPL_PRCS_PQUEUE_HPP
-#define MPT_IMPL_PRCS_PQUEUE_HPP
+#ifndef MPT_IMPL_PRCS_LOOKAHEAD_PQUEUE_HPP
+#define MPT_IMPL_PRCS_LOOKAHEAD_PQUEUE_HPP
 
 #include "node.hpp"
 
 #include <queue>
+#include <set>
 #include <mutex>
 
 namespace unc::robotics::mpt::impl::prcs {
 
-template <typename State, typename Traj>
-class PriorityQueue {
+template <typename State, typename Traj, int maxThreads>
+class LookaheadPriorityQueue {
     using Node = prcs::Node<State, Traj>;
+    using Scalar = typename State::Distance;
 
-    struct cmp {
+    struct costCmp {
         bool operator() (const Node* n1, const Node* n2) const {
-            return n1->rank() > n2->rank();
+            return n1->f() > n2->f();
         }
     };
+    using CostQueue = std::priority_queue<Node*, std::vector<Node*>, costCmp>;
+    using QueueVec = std::vector<CostQueue>;
 
-    using Queue = std::priority_queue<Node*, std::vector<Node*>, cmp>;
-    Queue q_;
+    unsigned lookAhead_{0};
+    unsigned minActiveRank_{0};
+    unsigned maxActiveRank_{0};
+    std::pair<unsigned, Scalar> toPop_{};
+    std::size_t counter_{0};
+
+    std::set<unsigned> ranksInQueue_;
+    QueueVec queueVec_;
+
     std::mutex mutex_;
 
   public:
-    PriorityQueue() {
+    LookaheadPriorityQueue() {
+    }
+
+    void setLookAhead(const unsigned& lookAhead) {
+        lookAhead_ = lookAhead;
+    }
+
+    const unsigned& lookAhead() const {
+        return lookAhead_;
     }
 
     void push(Node* node) {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        q_.push(node);
+        unsigned rank = node->rank();
+        if (rank >= queueVec_.size()) {
+            queueVec_.resize(rank + 1);
+        }
+        queueVec_[rank].push(node);
+        ranksInQueue_.insert(rank);
+        counter_++;
     }
 
     Node* pop() {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        if (q_.empty()) {
+        if (empty()) {
             return nullptr;
         }
 
-        auto node = q_.top();
-        q_.pop();
+        minActiveRank_ = *(ranksInQueue_.begin());
+        maxActiveRank_ = std::min(*(ranksInQueue_.rbegin()), minActiveRank_ + lookAhead_);
+
+        toPop_ = {minActiveRank_, R_INF};
+        for (unsigned i = minActiveRank_; i <= maxActiveRank_; ++i) {
+            CostQueue& queue = queueVec_[i];
+
+            if (queue.empty()) {
+                continue;
+            }
+
+            if (queue.top()->f() < toPop_.second) {
+                toPop_ = {i, queue.top()->f()};
+            }
+        }
+
+        CostQueue& queueToPop = queueVec_[toPop_.first];
+        if (queueToPop.empty()) {
+            throw std::runtime_error("[Lookahead priority queue] the queue to pop is empty!");
+        }
+
+        auto node = queueToPop.top();
+        queueToPop.pop();
+
+        unsigned rank = node->rank();
+        if (queueToPop.empty()) {
+            ranksInQueue_.erase(rank);
+        }
+        counter_--;
 
         return node;
     }
 
     bool empty() const {
-        return q_.empty();
+        return counter_ == 0;
     }
 
     std::size_t size() const {
-        return q_.size();
+        return counter_;
     }
 };
 
-} // unc::robotics::mpt::impl::prcs
+} // namespace unc::robotics::mpt::impl::prcs
 
-#endif // MPT_IMPL_PRCS_PQUEUE_HPP
+#endif // MPT_IMPL_PRCS_LOOKAHEAD_PQUEUE_HPP

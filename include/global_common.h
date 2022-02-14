@@ -51,6 +51,9 @@ namespace unc::robotics::snp {
 #define SE3_T_W 20
 #define SE3_R_W 1
 
+#define NORM2_T_W 1
+#define NORM2_R_W 10
+
 using Str = std::string;
 using Idx = unsigned short;
 using SizeType = std::size_t;
@@ -58,13 +61,14 @@ using RealNum = double;
 using RealUniformDist = std::uniform_real_distribution<RealNum>;
 using RealNormalDist = std::normal_distribution<RealNum>;
 using IntUniformDist = std::uniform_int_distribution<int>;
-const Idx I_INF = std::numeric_limits<Idx>::max();
-const RealNum R_INF = std::numeric_limits<RealNum>::infinity();
-const RealNum EPS = 1e-6;
-const RealNum DEGREE_TO_RAD = M_PI/180.0;
-const RealNum RAD_TO_DEGREE = 180.0/M_PI;
+constexpr Idx I_INF = std::numeric_limits<Idx>::max();
+constexpr RealNum R_INF = std::numeric_limits<RealNum>::infinity();
+constexpr RealNum EPS = 1e-10;
+constexpr RealNum DEGREE_TO_RAD = M_PI/180.0;
+constexpr RealNum RAD_TO_DEGREE = 180.0/M_PI;
 
 using IdxPoint = Eigen::Matrix<Idx, 3, 1, Eigen::ColMajor>;
+using IntPoint = Eigen::Matrix<int, 3, 1, Eigen::ColMajor>;
 using Vec2 = Eigen::Matrix<RealNum, 2, 1, Eigen::ColMajor>;
 using Vec3 = Eigen::Matrix<RealNum, 3, 1, Eigen::ColMajor>;
 using Vec4 = Eigen::Matrix<RealNum, 4, 1, Eigen::ColMajor>;
@@ -86,6 +90,6 @@ using TimePoint = std::chrono::time_point<Clock>;
 const RealNum kRadCurve = 100.0;
 const RealNum kAngleConstraintDegree = 90.0;
 
-}
+} // namespace unc::robotics::snp
 
-#endif
+#endif // SNP_GLOBAL_COMMON_H

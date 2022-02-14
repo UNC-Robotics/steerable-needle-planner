@@ -64,11 +64,11 @@ struct ProblemConfig {
     RealNum goal_ang_tolerance = 0.005;
     // When a state is close enough to the goal, always try direct connection.
     RealNum goal_connecting_rad = constrain_goal_orientation? 10.0 : 5.0;
-    // Maximum distance between two states,
-    // if set to negative, always connect to the sample without constraining the step length.
+    // Maximum distance between two states
     RealNum steer_step = constrain_goal_orientation ? 5.0 : 2.0;
     // Resolution to check if an edge is valid.
     RealNum validity_res = 0.5;
+    RealNum cost_res = 0.1;
     // Safe margin for collision detection.
     RealNum safe_margin = 0.0;
     // Resolution used to reinterpolate the result plan.
@@ -77,6 +77,8 @@ struct ProblemConfig {
     RealNum goal_bias = 0.05;
     // For an arbitrary state, the probability of connecting it to the goal directly.
     RealNum direct_connect_ratio = constrain_goal_orientation? 1.0 : 0.5;
+    // Method used to do goal connection.
+    bool use_dubins_connection = false;
     // When doing spreading, if the start orientation is fixed.
     bool spreading_fix_start_orientation = false;
     // If we allow spreading in all directions, some of the configurations are used
@@ -84,26 +86,37 @@ struct ProblemConfig {
     RealNum start_connect_ratio = 0.05;
     // If the sampler also sample orientation.
     bool sample_orientation = false;
+    // For spreading planner.
+    RealNum spreading_min_dist = 100.0;
 
     // For RCS planner.
-    RealNum delta_ell_max = 20.0;
+    RealNum delta_ell_max = 16.0;
     RealNum delta_theta_max = 0.5 * M_PI;
-    RealNum delta_ell_min = 1.5;
+    RealNum delta_ell_min = 0.125;
     RealNum delta_theta_min = 0.157;
-    bool prune_result_branch = false;
+
+    // For RCS* planner.
+    unsigned look_ahead = 3;
+    RealNum cost_approx_factor = 0.1;
+
+    bool optimal = false;
+    bool use_trilinear_interpolation = true;
 
     // Termination control.
-    // Timeout in milliseconds (if used).
+    // Timeout in milliseconds.
     SizeType timeout = 1000;
-    // Maximum number of nodes in the tree (if used).
+    // Maximum number of nodes in the tree.
     SizeType num_nodes = 10000;
+    // Number of plans needed for termination.
+    SizeType num_plans_needed = 10;
 
-    // misc
+    // Misc.
     Idx seed = 1;
     bool show_logs = true;
     Str output_file_root = "../data/output/test";
     Str obstacle_file = "../data/input/obstacles.txt";
     Str cost_file = "../data/input/costs.txt";
+    Str healpix_file = "../data/input/HEALPix.txt";
 
 #ifndef HAVE_GLOBAL_VARIABLES
     ProblemConfig(const bool orientation=false,
@@ -136,7 +149,7 @@ struct ProblemConfig {
 #endif
 
     RealNum Threshold0(const RealNum min_rad, const RealNum ang) const {
-        return 2*(min_rad*std::cos(ang*DEGREE_TO_RAD/2));
+        return 2*(min_rad*std::sin(std::fmin(ang, 180.0) * DEGREE_TO_RAD/2));
     }
 
     RealNum Threshold1(const RealNum min_rad, const RealNum ang) const {
@@ -158,18 +171,11 @@ struct ProblemConfig {
         }
 
         env->SetMinDist(0.5*needle_d + env->VoxelRadius() + safe_margin);
+        env->EnableTrilinearInterpolation(use_trilinear_interpolation);
     }
 
     void SetEnvironment(EnvPtr environment) {
         env = environment;
-
-        if (constrain_goal_orientation) {
-            env->SetCostType(ImageEnvironment::CostType::GOAL_ORIENTATION);
-        }
-        else {
-            env->SetCostType(ImageEnvironment::CostType::PATH_LENGTH);
-        }
-
         env->SetMinDist(0.5*needle_d + env->VoxelRadius() + safe_margin);
     }
 
@@ -184,6 +190,6 @@ struct ProblemConfig {
 
 using ConfigPtr = std::shared_ptr<ProblemConfig>;
 
-}
+} // namespace unc::robotics::snp
 
-#endif
+#endif // SNP_PROBLEM_CONFIG_H

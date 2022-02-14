@@ -40,10 +40,20 @@
 #include <set>
 #include <mutex>
 #include <iostream>
+#include <unordered_set>
 
 namespace unc::robotics::mpt::impl::prcs {
 using ResLevels = std::array<unsigned, 2>;
 using NodeIndices = std::array<unsigned, 3>;
+
+template <typename Vector>
+Str IdxToStr(const Vector& idx) {
+    return std::to_string(idx[0]) + ","
+           + std::to_string(idx[1]) + ","
+           + std::to_string(idx[2]);
+}
+
+using IndexSet3 = std::unordered_set<Str>;
 
 template <typename State, typename Traj>
 class Node {
@@ -52,26 +62,15 @@ class Node {
     State state_;
     Edge<State, Traj> parent_;
     Scalar traj_length_{0};
+    Scalar cost_to_come_{0};
+    Scalar cost_to_go_{0};
     bool valid_{false};
+
     unsigned rank_{0};
     ResLevels levels_{ {0,0} };
     NodeIndices indices_{ {0,0,0} };
 
-    struct cmp {
-        bool operator() (const NodeIndices& i, const NodeIndices& j) const {
-            if (i[0] != j[0]) {
-                return i[0] > j[0];
-            }
-
-            if (i[1] != j[1]) {
-                return i[1] > j[1];
-            }
-
-            return i[2] > j[2];
-        }
-    };
-
-    std::set<NodeIndices, cmp> explored_;
+    IndexSet3 explored_;
     std::mutex mutex_;
 
   public:
@@ -86,6 +85,8 @@ class Node {
         state_ = State(std::forward<Args>(args)...);
         parent_ = Edge<State, Traj>(std::move(traj), parent);
         traj_length_ = 0;
+        cost_to_come_ = 0;
+        cost_to_go_ = 0;
         valid_ = false;
         rank_ = 0;
         levels_ = {0,0};
@@ -105,6 +106,26 @@ class Node {
 
     const Scalar& length() const {
         return traj_length_;
+    }
+
+    Scalar& cost() {
+        return cost_to_come_;
+    }
+
+    const Scalar& cost() const {
+        return cost_to_come_;
+    }
+
+    Scalar& costToGo() {
+        return cost_to_go_;
+    }
+
+    const Scalar& costToGo() const {
+        return cost_to_go_;
+    }
+
+    Scalar f() const {
+        return cost_to_come_ + cost_to_go_;
     }
 
     bool& valid() {
@@ -170,11 +191,11 @@ class Node {
     bool explored(const NodeIndices& indices) {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        if (explored_.find(indices) != explored_.end()) {
+        if (explored_.find(IdxToStr(indices)) != explored_.end()) {
             return true;
         }
 
-        explored_.insert(indices);
+        explored_.insert(IdxToStr(indices));
         return false;
     }
 
@@ -197,8 +218,8 @@ class Node {
     }
 
     void printState(const State& state, std::ostream& out=std::cout) const {
-        const auto& p = state.translation();
-        const auto& q = state.rotation();
+        auto const& p = state.translation();
+        auto const& q = state.rotation();
 
         out << "[" << p[0] << "," << p[1] << "," << p[2] << ","
             << q.w() << "," << q.x() << "," << q.y() << "," << q.z() << "]"
@@ -212,6 +233,25 @@ struct NodeKey {
         return node->state();
     }
 };
-}
 
-#endif
+template <typename State>
+struct StateNode {
+    State state;
+
+    StateNode(const State& s) {
+        state = s;
+        Eigen::Vector3d tang = (s.rotation().normalized()*Eigen::Vector3d::UnitZ()).normalized();
+        state.rotation() = Eigen::Quaterniond::FromTwoVectors(Eigen::Vector3d::UnitZ(), tang).normalized();
+    }
+};
+
+struct StateNodeKey {
+    template <typename State>
+    const State& operator() (const StateNode<State>& n) const {
+        return n.state;
+    }
+};
+
+} // unc::robotics::mpt::impl::prcs
+
+#endif // MPT_IMPL_PRCS_NODE_HPP

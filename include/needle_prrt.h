@@ -41,26 +41,31 @@
 #include <mpt/impl/nearest_strategy.hpp>
 
 #include "impl/needle_planner_mode.h"
-#include "impl/needle_prrt_impl.h"
-#include "impl/needle_spreading_prrt_impl.h"
+#include "impl/prrt/needle_prrt_impl.h"
+#include "impl/prrt/needle_paorrt_impl.h"
+#include "impl/prrt/needle_spreading_prrt_impl.h"
+#include "impl/prrt/needle_spreading_paorrt_impl.h"
 
 namespace unc::robotics::mpt {
 
 namespace impl {
+
 template <int maxThreads, class Mode, bool reportStats, typename NNStrategy>
 struct NeedlePRRTStrategy {};
 
 template <typename ... Options>
 struct NeedlePRRTOptions {
     static constexpr int maxThreads = pack_int_tag_v<max_threads, 0, Options...>;
-    static constexpr bool usePoint2Point = pack_contains_v<point2point_planner, Options...>;
-    static constexpr bool useSpreading = pack_contains_v<spreading_planner, Options...>;
     static constexpr bool reportStats = pack_bool_tag_v<report_stats, false, Options...>;
 
-    static_assert(!(usePoint2Point&& useSpreading), "Cannot include both modes!");
+    static constexpr bool useSpreading = pack_contains_v<spreading, Options...>;
+    static constexpr bool useOptimal = pack_contains_v<optimal, Options...>;
 
-    using Mode = std::conditional_t<!useSpreading, point2point_planner, spreading_planner>;
+    using Mode = std::conditional_t<!useSpreading, std::conditional_t<!useOptimal, point2point_planner, point2point_optimal_planner>,
+                                                   std::conditional_t<!useOptimal, spreading_planner, spreading_optimal_planner>>;
+
     using NNStrategy = pack_nearest_t<Options...>;
+
     using type = NeedlePRRTStrategy<maxThreads, Mode, reportStats, NNStrategy>;
 };
 
@@ -78,11 +83,25 @@ struct PlannerResolver<Scenario, impl::NeedlePRRTStrategy<maxThreads, spreading_
                  nearest_strategy_t<Scenario, maxThreads, NNStrategy>>;
 };
 
-}
+template <typename Scenario, int maxThreads, bool reportStats, typename NNStrategy>
+struct PlannerResolver<Scenario, impl::NeedlePRRTStrategy<maxThreads, point2point_optimal_planner, reportStats, NNStrategy>> {
+    using type = impl::prrt::NeedlePAORRT<
+                 Scenario, maxThreads, reportStats,
+                 nearest_strategy_t<Scenario, maxThreads, NNStrategy>>;
+};
+
+template <typename Scenario, int maxThreads, bool reportStats, typename NNStrategy>
+struct PlannerResolver<Scenario, impl::NeedlePRRTStrategy<maxThreads, spreading_optimal_planner, reportStats, NNStrategy>> {
+    using type = impl::prrt::NeedleSpreadingPAORRT<
+                 Scenario, maxThreads, reportStats,
+                 nearest_strategy_t<Scenario, maxThreads, NNStrategy>>;
+};
+
+} // namespace impl
 
 template <typename ... Options>
 using NeedlePRRT = typename impl::NeedlePRRTOptions<Options...>::type;
 
-}
+} // namespace unc::robotics::mpt
 
-#endif
+#endif // SNP_NEEDLE_PRRT_H

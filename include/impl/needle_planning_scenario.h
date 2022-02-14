@@ -47,8 +47,8 @@
 #include <mpt/uniform_sampler.hpp>
 
 #include "../problem_config.h"
-#include "needle_goal.h"
-#include "needle_spreading_goal.h"
+#include "goals/needle_goal.h"
+#include "goals/needle_spreading_goal.h"
 #include "needle_space.h"
 #include "needle_sampler.h"
 #include "needle_validator.h"
@@ -119,14 +119,14 @@ class NeedlePlanningScenario<DistanceSpace, PoseSampler, StatePropagator, StateV
         const Vec3& start_p = start.translation();
         const Vec3& goal_p = goal.translation();
 
-        const RealNum sg = (start_p - goal_p).norm();
+        const RealNum d = (start_p - goal_p).norm();
 
         unsigned status;
 
-        if (sg < cfg->dist_threshold_0) {
+        if (d < cfg->dist_threshold_0) {
             status = 0;
         }
-        else if (sg < cfg->dist_threshold_1) {
+        else if (d < cfg->dist_threshold_1) {
             status = 1;
         }
         else {
@@ -136,7 +136,7 @@ class NeedlePlanningScenario<DistanceSpace, PoseSampler, StatePropagator, StateV
         return status;
     }
 
-    bool ValidProblem() const {
+    bool ValidProblem() {
         return validator_.ValidProblem();
     }
 
@@ -153,7 +153,7 @@ class NeedlePlanningScenario<DistanceSpace, PoseSampler, StatePropagator, StateV
     }
 
     bool valid(const State& s) const {
-        return validator_.ValidState(s);
+        return validator_.Valid(s);
     }
 
     bool valid(const Distance& length) const {
@@ -161,7 +161,11 @@ class NeedlePlanningScenario<DistanceSpace, PoseSampler, StatePropagator, StateV
     }
 
     bool valid(const State& s, const Distance& length) const {
-        return (validator_.ValidLength(length) && validator_.ValidState(s));
+        return (validator_.ValidLength(length) && validator_.Valid(s));
+    }
+
+    bool validReachableSpace(const State& s) {
+        return validator_.ValidReachableSpace(s);
     }
 
     bool collision(const State& s) const {
@@ -178,7 +182,7 @@ class NeedlePlanningScenario<DistanceSpace, PoseSampler, StatePropagator, StateV
 
     Scalar CurveCost(const State& s1, const State& s2) const {
         return cfg_->env->CurveCost(s1.translation(), s1.rotation(), s2.translation(), s2.rotation(),
-                                    cfg_->rad_curv, cfg_->validity_res);
+                                    cfg_->rad_curv, cfg_->cost_res);
     }
 
     Scalar FinalStateCost(const State& s) const {
@@ -264,12 +268,12 @@ class NeedlePlanningScenario<DistanceSpace, PoseSampler, StatePropagator, StateV
         return start_;
     }
 
-    std::pair<bool, State> DirectConnectingStart(const State& s) const {
+    std::optional<State> DirectConnectingStart(const State& s) const {
         return validator_.DirectConnectingStart(s);
     }
 
     bool valid(const State& s) const {
-        return validator_.ValidState(s);
+        return validator_.Valid(s);
     }
 
     bool valid(const Distance& length) const {
@@ -277,7 +281,7 @@ class NeedlePlanningScenario<DistanceSpace, PoseSampler, StatePropagator, StateV
     }
 
     bool valid(const State& s, const Distance& length) const {
-        return (validator_.ValidLength(length) && validator_.ValidState(s));
+        return validator_.Valid(s, length);
     }
 
     bool collision(const State& s) const {
@@ -294,7 +298,7 @@ class NeedlePlanningScenario<DistanceSpace, PoseSampler, StatePropagator, StateV
 
     Scalar CurveCost(const State& s1, const State& s2) const {
         return cfg_->env->CurveCost(s1.translation(), s1.rotation(), s2.translation(), s2.rotation(),
-                                    cfg_->rad_curv, cfg_->validity_res);
+                                    cfg_->rad_curv, cfg_->cost_res);
     }
 
     Scalar FinalStateCost(const State& s) const {
@@ -326,6 +330,6 @@ class NeedlePlanningScenario<DistanceSpace, PoseSampler, StatePropagator, StateV
     }
 };
 
-}
+} // namespace unc::robotics::snp
 
-#endif
+#endif // SNP_NEEDLE_PLANNING_SCENARIO_H

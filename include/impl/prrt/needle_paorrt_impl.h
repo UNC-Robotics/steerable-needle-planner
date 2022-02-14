@@ -28,46 +28,23 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//! @author Mengyu Fu
+//! @author Jeff Ichnowski
 
 #pragma once
-#ifndef SNP_NEEDLE_SPREADING_PRRT_IMPL_H
-#define SNP_NEEDLE_SPREADING_PRRT_IMPL_H
+#ifndef SNP_NEEDLE_PAORRT_IMPL_H
+#define SNP_NEEDLE_PAORRT_IMPL_H
 
-#include <mpt/impl/prrt/prrt.hpp>
-#include <mpt/impl/prrt/edge.hpp>
-#include <mpt/impl/prrt/node.hpp>
-#include <mpt/impl/atom.hpp>
-#include <mpt/impl/goal_has_sampler.hpp>
-#include <mpt/impl/link_trajectory.hpp>
-#include <mpt/impl/object_pool.hpp>
-#include <mpt/impl/planner_base.hpp>
-#include <mpt/impl/scenario_goal.hpp>
-#include <mpt/impl/scenario_goal_sampler.hpp>
-#include <mpt/impl/scenario_link.hpp>
-#include <mpt/impl/scenario_rng.hpp>
-#include <mpt/impl/scenario_sampler.hpp>
-#include <mpt/impl/scenario_space.hpp>
-#include <mpt/impl/timer_stat.hpp>
-#include <mpt/impl/worker_pool.hpp>
-#include <mpt/log.hpp>
-#include <mpt/random_device_seed.hpp>
-#include <forward_list>
-#include <mutex>
-#include <utility>
-
-#include "../utils.h"
+#include "prrt_base.hpp"
 
 namespace unc::robotics::mpt::impl::prrt {
 template <typename Scenario, int maxThreads, bool reportStats, typename NNStrategy>
-class NeedleSpreadingPRRT : public
-    PlannerBase<NeedleSpreadingPRRT<Scenario, maxThreads, reportStats, NNStrategy>> {
+class NeedlePAORRT : public PlannerBase<NeedlePAORRT<Scenario, maxThreads, reportStats, NNStrategy>> {
   public:
     using Space = scenario_space_t<Scenario>;
     using State = typename Space::Type;
 
   private:
-    using Planner = NeedleSpreadingPRRT;
+    using Planner = NeedlePAORRT;
     using Base = PlannerBase<Planner>;
     using Distance = typename Space::Distance;
     using Link = scenario_link_t<Scenario>;
@@ -87,6 +64,11 @@ class NeedleSpreadingPRRT : public
 
     std::mutex mutex_;
     std::forward_list<Node*> goals_;
+    Distance bestCost_{std::numeric_limits<Distance>::infinity()};
+    Distance maxCost_{0};
+    snp::TimePoint start_time_;
+    using ResultSeq = std::vector<std::pair<float, Distance>>;
+    ResultSeq resultWithTime_;
 
     Node* approxRes_{nullptr};
     Distance bestDist_{std::numeric_limits<Distance>::infinity()};
@@ -100,23 +82,32 @@ class NeedleSpreadingPRRT : public
     WorkerPool<Worker, maxThreads> workers_;
 
     void foundGoal(Node* node) {
-        MPT_LOG(INFO) << "found solution";
+        if constexpr (reportStats) {
+            MPT_LOG(INFO) << "found solution with cost " << node->cost();
+        }
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
             goals_.push_front(node);
+            bestCost_ = std::fmin(bestCost_, node->cost());
+            resultWithTime_.push_back({std::chrono::duration_cast<std::chrono::duration<float>>(snp::Clock::now() - start_time_).count(),
+                                         node->cost()});
         }
+
         ++goalCount_;
+
+        bestDist_ = 0.0;
     }
 
-    void foundApproxGoal(Node* node, Distance* dist) {
+    void foundApproxGoal(Node* node, const State& goalState, ObjectPool<Node>& nodePool,
+                         Distance* dist) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
 
             if (*dist < bestDist_) {
                 MPT_LOG(INFO) << "update approximate solution with dist " << *dist;
                 bestDist_ = *dist;
-                approxRes_ = node;
+                approxRes_ = nodePool.allocate(linkTrajectory(true), node, goalState);
             }
             else if (*dist > bestDist_) {
                 *dist = bestDist_;
@@ -124,14 +115,29 @@ class NeedleSpreadingPRRT : public
         }
     }
 
+    Distance costUpperBound() const {
+        if (solved()) {
+            return bestCost_;
+        }
+
+        return maxCost_;
+    }
+
+    void updateMaxCost(const Distance& newCost) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        maxCost_ = std::max(maxCost_, newCost);
+    }
+
   public:
     template <typename RNGSeed = RandomDeviceSeed<>>
-    explicit NeedleSpreadingPRRT(const Scenario& scenario = Scenario(), const RNGSeed& seed = RNGSeed())
+    explicit NeedlePAORRT(const Scenario& scenario = Scenario(), const RNGSeed& seed = RNGSeed())
         : nn_(scenario.space())
         , workers_(scenario, seed) {
         MPT_LOG(TRACE) << "Using nearest: " << log::type_name<NNStrategy>();
         MPT_LOG(TRACE) << "Using concurrency: " << log::type_name<NNConcurrency>();
         MPT_LOG(TRACE) << "Using sampler: " << log::type_name<Sampler>();
+
+        MPT_LOG(INFO) << "Using planner: " << "NeedlePAORRT";
     }
 
     void setGoalBias(Distance bias) {
@@ -163,13 +169,6 @@ class NeedleSpreadingPRRT : public
         nn_.insert(node);
     }
 
-    template <typename ... Args>
-    Node* addStartAndReturn(Args&& ... args) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        Node* node = startNodes_.allocate(Traj{}, nullptr, std::forward<Args>(args)...);
-        return node;
-    }
-
     using Base::solveFor;
     using Base::solveUntil;
 
@@ -180,6 +179,7 @@ class NeedleSpreadingPRRT : public
             throw std::runtime_error("there are no valid initial states");
         }
 
+        start_time_ = snp::Clock::now();
         workers_.solve(*this, doneFn);
     }
 
@@ -353,6 +353,10 @@ class NeedleSpreadingPRRT : public
         return costs;
     }
 
+    const ResultSeq& resultWithTime() const {
+        return resultWithTime_;
+    }
+
   private:
     template <typename Visitor, typename Nodes>
     void visitNodes(Visitor&& visitor, const Nodes& nodes) const {
@@ -377,7 +381,7 @@ class NeedleSpreadingPRRT : public
 };
 
 template <typename Scenario, int maxThreads, bool reportStats, typename NNStrategy>
-class NeedleSpreadingPRRT<Scenario, maxThreads, reportStats, NNStrategy>::Worker
+class NeedlePAORRT<Scenario, maxThreads, reportStats, NNStrategy>::Worker
     : public WorkerStats<reportStats> {
     using Stats = WorkerStats<reportStats>;
     using CSampler = typename Scenario::CSampler;
@@ -394,17 +398,14 @@ class NeedleSpreadingPRRT<Scenario, maxThreads, reportStats, NNStrategy>::Worker
     Propagator propagator_;
     Distance bestDist_{std::numeric_limits<Distance>::infinity()};
 
-    State start_;
-
   public:
     Worker(Worker&& other)
         : no_(other.no_)
         , scenario_(other.scenario_)
         , rng_(other.rng_)
         , nodePool_(std::move(other.nodePool_))
-        , csampler_(scenario_.Config(), scenario_.StartState())
+        , csampler_(scenario_.Config(), scenario_.StartState(), scenario_.GoalState())
         , propagator_(scenario_.Config()) {
-
     }
 
     template <typename RNGSeed>
@@ -412,8 +413,8 @@ class NeedleSpreadingPRRT<Scenario, maxThreads, reportStats, NNStrategy>::Worker
         : no_(no)
         , scenario_(scenario)
         , rng_(seed)
-        , csampler_(scenario.Config(), scenario.StartState())
-        , propagator_(scenario_.Config()) {
+        , csampler_(scenario.Config(), scenario.StartState(), scenario.GoalState())
+        , propagator_(scenario.Config()) {
     }
 
     decltype(auto) space() const {
@@ -435,6 +436,7 @@ class NeedleSpreadingPRRT<Scenario, maxThreads, reportStats, NNStrategy>::Worker
         if constexpr (scenario_has_goal_sampler_v<Scenario, RNG>) {
             if (no_ == 0 && planner.goalBias_ > 0) {
                 scenario_goal_sampler_t<Scenario, RNG> goalSampler(scenario_);
+
                 Distance scaledBias = planner.goalBias_ * planner.workers_.size();
 
                 MPT_LOG(TRACE) << "using scaled goal bias of " << scaledBias;
@@ -463,6 +465,7 @@ unbiasedSamplingLoop:
 
         while (!done()) {
             Stats::countIteration();
+
             addSample(planner, csampler_(rng_));
         }
 
@@ -485,24 +488,14 @@ unbiasedSamplingLoop:
             return;
         }
 
+        randState.cost() = planner.costUpperBound() * uniform01_(rng_);
+
         auto [nearNode, d] = nearest(planner, randState).value();
 
         State newState = randState;
 
         if (scenario_.PositionDist(nearNode->state(), randState) < snp::EPS) {
             return;
-        }
-
-        if (uniform01_(rng_) < scenario_.Config()->start_connect_ratio) {
-            auto [success, startState] = scenario_.DirectConnectingStart(randState);
-
-            if (success) {
-                Node* newStartNode = planner.addStartAndReturn(startState);
-                Node* newNode = nodePool_.allocate(linkTrajectory(true), newStartNode, randState);
-                newNode->length() = snp::CurveLength(startState, randState);
-                planner.nn_.insert(newNode);
-                return;
-            }
         }
 
         auto propagated = propagator_(nearNode->state(), randState, rng_);
@@ -513,44 +506,58 @@ unbiasedSamplingLoop:
 
         newState = *propagated;
 
-        const auto& newLength = nearNode->length() + snp::CurveLength(nearNode->state(), newState);
+        auto const& newLength = nearNode->length() + snp::CurveLength(nearNode->state(), newState);
 
         if (!scenario_.valid(newState, newLength)) {
             return;
         }
 
+        auto const& newCost = nearNode->cost() + scenario_.CurveCost(nearNode->state(), newState);
+
+        if (planner.solved() && newCost > planner.bestCost_) {
+            return;
+        }
+
+        newState.cost() = newCost;
+
         if (auto traj = validMotion(nearNode->state(), newState)) {
-            auto [isGoal, goalDist, goalState] = scenario_goal<Scenario>::check(scenario_, newState);
+            auto [isGoal, goalDist, goalStates] = scenario_goal<Scenario>::check(scenario_, newState);
+            auto const& goalState = goalStates[0];
 
             Node* newNode = nodePool_.allocate(linkTrajectory(traj), nearNode, newState);
             newNode->length() = newLength;
+            newNode->cost() = newCost;
             planner.nn_.insert(newNode);
+            planner.updateMaxCost(newCost);
 
             if (isGoal) {
-                const auto& goalLength = newLength + snp::CurveLength(newState, goalState);
+                auto const& goalLength = newLength + snp::CurveLength(newState, goalState);
+                auto const& goalCost = newNode->cost()
+                                       + scenario_.CurveCost(newState, goalState)
+                                       + scenario_.FinalStateCost(goalState);
 
                 if (!scenario_.valid(goalLength)) {
                     return;
                 }
 
-                if (snp::IsTheSameState(goalState, newState)) {
-                    planner.foundGoal(newNode);
-                }
-                else {
+                if (goalCost < planner.bestCost_) {
                     Node* goalNode = nodePool_.allocate(linkTrajectory(traj), newNode, goalState);
                     goalNode->length() = goalLength;
+                    goalNode->cost() = newNode->cost()
+                                       + scenario_.CurveCost(newState, goalState)
+                                       + scenario_.FinalStateCost(goalState);
                     planner.foundGoal(goalNode);
                 }
             }
             else if (!planner.solved() && goalDist < bestDist_) {
-                const auto& goalLength = newLength + snp::CurveLength(newState, goalState);
+                auto const& goalLength = newLength + snp::CurveLength(newState, goalState);
 
                 if (!scenario_.valid(goalLength)) {
                     return;
                 }
 
                 bestDist_ = goalDist;
-                planner.foundApproxGoal(newNode, &bestDist_);
+                planner.foundApproxGoal(newNode, goalState, nodePool_, &bestDist_);
             }
         }
     }
@@ -561,6 +568,6 @@ unbiasedSamplingLoop:
     }
 };
 
-}
+} // namespace unc::robotics::mpt::impl::paorrt
 
-#endif
+#endif // SNP_NEEDLE_PAORRT_IMPL_H

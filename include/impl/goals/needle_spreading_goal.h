@@ -34,10 +34,10 @@
 #ifndef SNP_NEEDLE_SPREADING_GOAL_H
 #define SNP_NEEDLE_SPREADING_GOAL_H
 
-#include "mpt/goal_sampler.hpp"
+#include <mpt/goal_sampler.hpp>
 #include <utility>
 
-#include "../utils.h"
+#include "../../needle_utils.h"
 
 namespace unc::robotics::mpt {
 using namespace snp;
@@ -48,14 +48,15 @@ class NeedleSpreadingGoal {
     using Distance = typename Space::Distance;
     using Scalar = typename Space::Distance;
 
-    const ConfigPtr cfg_;
-    const Vec3 start_p_;
+    ConfigPtr cfg_;
+    Vec3 start_p_;
     std::vector<Vec3> goals_;
+    Distance min_dist_{60.0};
 
   public:
     template <typename ... Args>
     NeedleSpreadingGoal(ConfigPtr cfg, const Vec3& start_p, Args&& ... args)
-        : cfg_(cfg), start_p_(start_p) {
+        : cfg_(cfg), start_p_(start_p), min_dist_{cfg->spreading_min_dist} {
     }
 
     void ProvideGoalPoints(const std::vector<Vec3>& goals) {
@@ -80,7 +81,7 @@ class NeedleSpreadingGoal {
         if (goals_.size() > 0) {
             Distance dist = R_INF;
 
-            for (const auto& p : goals_) {
+            for (auto const& p : goals_) {
                 dist = std::min((pos - p).norm(), dist);
             }
 
@@ -89,6 +90,10 @@ class NeedleSpreadingGoal {
             }
 
             return {false, dist, s};
+        }
+
+        if ((pos - start_p_).norm() > min_dist_) {
+            return {true, 1/((pos - start_p_).norm() + 1e-3), s};
         }
 
         return {false, 1/((pos - start_p_).norm() + 1e-3), s};
@@ -110,7 +115,7 @@ class GoalSampler<NeedleSpreadingGoal<Space>> {
 
     template <typename RNG>
     Type operator() (RNG& rng) {
-        State goal;
+        Type goal;
 
         if (goal_.size() == 0) {
             Vec3 result;
@@ -122,7 +127,7 @@ class GoalSampler<NeedleSpreadingGoal<Space>> {
             goal.translation() = result;
         }
         else {
-            unsigned rand_idx = goal_.size() * uniform_(rng);
+            const unsigned& rand_idx = goal_.size() * uniform_(rng);
             goal.translation() = goal_.goal(rand_idx);
         }
 
@@ -130,6 +135,6 @@ class GoalSampler<NeedleSpreadingGoal<Space>> {
     }
 };
 
-}
+} // namespace unc::robotics::mpt
 
-#endif
+#endif // SNP_NEEDLE_SPREADING_GOAL_H
