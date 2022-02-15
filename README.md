@@ -1,5 +1,11 @@
 # Steerable Needle Planner
 
+#### Update 02/14/2022
+
+Extended code for IEEE International Conference on Robotics and Automation (ICRA) 2022 paper *Resolution-Optimal Motion Planning for Steerable Needles (to appear)*. [[arXiv](https://arxiv.org/abs/2110.02907)]
+
+#### Original
+
 Code for Robotics: Science and Systems (RSS) 2021 paper *Toward Certifiable Motion Planning for Medical Steerable Needles*. [[Paper](http://www.roboticsproceedings.org/rss17/p081.pdf)]
 
 Steerable Needle Planner efficiently produces motion plans for medical steerable needles, considering constraints including maximum curvature, obstacles, and etc.
@@ -56,9 +62,13 @@ make
 
 ### Run
 
-This repository contains two different needle planners. One is an RRT-based planner (referred to as RRT) initially proposed by Patil et al. [1], the other is a search-based planner (referred to as RCS) initially proposed by Fu et al. [2].
+This repository contains several different needle planners:
+* An RRT-based planner (referred to as RRT) initially proposed by Patil et al. [1]
+* A planner based on AO-RRT [2] that is adapted for steerable needles.
+* A search-based *resolution-complete* planner (referred to as RCS) initially proposed by Fu et al. [3]
+* A search-based *resolution-optimal* planner (referred to as RCS\*) initially proposed by Fu et al. [4]
 
-There are several test applications already provided, they all read from `{YOUR_LOCAL_REPO}/data/input/*` for environment information, needle parameters, and start/goal poses. By default, the planner saves the search tree to `data/output/test_ptcloud.txt` and saves the best solution plan to `data/output/test_interp.txt`.
+There are several test applications already provided, they all read from `{YOUR_LOCAL_REPO}/data/input/*` for environment information, needle parameters, and start/goal poses. By default, the planner saves the search tree to `data/output/{DATE_AND_TIME}_ptcloud.txt` and saves the best solution plan to `data/output/{DATE_AND_TIME}_interp.txt`.
 
 Before running any of the test applications, run
 ```
@@ -69,13 +79,25 @@ since the test applications will save results in the above directory.
 * Plan from start to goal using the RRT planner:
 ```
 cd {YOUR_LOCAL_REPO}/build
-./app/rrt [if_constrain_goal_orientation] [if_multi_threading] [random_seed]
+./app/rrt [if_constrain_goal_orientation] [if_multi_threading] [random_seed] [tag]
+```
+
+* Plan from start to goal using the AO-RRT planner:
+```
+cd {YOUR_LOCAL_REPO}/build
+./app/aorrt [if_constrain_goal_orientation] [if_multi_threading] [random_seed] [tag]
 ```
 
 * Plan from start to goal using the RCS planner:
 ```
 cd {YOUR_LOCAL_REPO}/build
-./app/rcs [if_constrain_goal_orientation] [if_multi_threading] [random_seed]
+./app/rcs [if_constrain_goal_orientation] [if_multi_threading] [random_seed] [tag]
+```
+
+* Plan from start to goal using the RCS* planner:
+```
+cd {YOUR_LOCAL_REPO}/build
+./app/rcs_star [if_constrain_goal_orientation] [if_multi_threading] [random_seed] [tag]
 ```
 
 For the above test applications, the planner will run for 1 second and collect all solution plans generated. Checkout `include/test_utils.h` for different termination conditions.
@@ -83,13 +105,19 @@ For the above test applications, the planner will run for 1 second and collect a
 * Plan from start (with no orientation constraint) to goal regions, using the RRT planner:
 ```
 cd {YOUR_LOCAL_REPO}/build
-./app/rrt_spreading [if_multi_threading] [random_seed]
+./app/rrt_spreading [if_multi_threading] [random_seed] [tag]
+```
+
+* Plan from start (with no orientation constraint) to goal regions, using the AO-RRT planner:
+```
+cd {YOUR_LOCAL_REPO}/build
+./app/aorrt_spreading [if_multi_threading] [random_seed] [tag]
 ```
 
 * Plan from start (with no orientation constraint) to goal regions, using the RCS planner:
 ```
 cd {YOUR_LOCAL_REPO}/build
-./app/rcs_spreading [if_multi_threading] [random_seed]
+./app/rcs_spreading [if_multi_threading] [random_seed] [tag]
 ```
 
 For the above test applications, the planner will run for 50 seconds and collect all solution plans that get close enough (within 3mm) to the goal points.
@@ -107,13 +135,17 @@ where `ptcloud_x` are the files saving the point clouds. For example, `python3 {
 
 [1] Patil, S., Burgner, J., Webster, R.J. and Alterovitz, R., 2014. Needle steering in 3-D via rapid replanning. IEEE Transactions on Robotics, 30(4), pp.853-864.
 
-[2] Fu, M., Salzman, O. and Alterovitz, R., 2021. Toward Certifiable Motion Planning for Medical Steerable Needles. Robotics science and systems: online proceedings, 2021.
+[2] Hauser, K. and Zhou, Y., 2016. Asymptotically optimal planning by feasible kinodynamic planning in a state–cost space. IEEE Transactions on Robotics, 32(6), pp.1431-1443.
+
+[3] Fu, M., Salzman, O. and Alterovitz, R., 2021. Toward Certifiable Motion Planning for Medical Steerable Needles. Robotics science and systems: online proceedings, 2021.
+
+[4] Fu, M., Solovey, K., Salzman, O. and Alterovitz, R., 2022. Resolution-Optimal Motion Planning for Steerable Needles. IEEE International Conference on Robotics and Automation, 2022.
 
 ## Citation
 
-If you use this source code, please cite the following paper:
+If you use this source code, please cite the following papers accordingly:
 ```
-@inproceedings{Fu-RSS-21,
+@inproceedings{Fu2021_RSS,
     author    = {Mengyu Fu and Oren Salzman and Ron Alterovitz},
     title     = {{Toward Certifiable Motion Planning for Medical Steerable Needles}},
     booktitle = {Proceedings of Robotics: Science and Systems},
@@ -121,5 +153,15 @@ If you use this source code, please cite the following paper:
     address   = {Virtual},
     month     = {July},
     doi       = {10.15607/RSS.2021.XVII.081}
+}
+
+@article{Fu2021_arXiv,
+      title={Resolution-Optimal Motion Planning for Steerable Needles}, 
+      author={Mengyu Fu and Kiril Solovey and Oren Salzman and Ron Alterovitz},
+      year={2021},
+      journal={arXiv preprint arXiv:2110.02907v1 [cs.RO]},
+      eprint={2110.02907},
+      archivePrefix={arXiv},
+      primaryClass={cs.RO}
 }
 ```
