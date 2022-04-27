@@ -161,9 +161,16 @@ bool ImageEnvironment::ConstructEnvironmentFromFile(const Str file_name) {
     std::ifstream fin;
     fin.open(file_name);
 
+    char delimiter = ' ';
+    if (file_name.compare(file_name.size() - 4, 4, ".csv") == 0) {
+        delimiter = ',';
+    }
+
     if (!fin.is_open()) {
         throw std::runtime_error("Failed to open " + file_name);
     }
+
+    Str field;
 
     Str line;
     Affine ijk_to_ras;
@@ -173,7 +180,8 @@ bool ImageEnvironment::ConstructEnvironmentFromFile(const Str file_name) {
             std::istringstream s(line);
 
             for (auto j = 0; j < 4; ++j) {
-                s >> ijk_to_ras(i, j);
+                std::getline(s, field, delimiter);
+                ijk_to_ras(i, j) = std::stod(field);
             }
         }
         else {
@@ -190,7 +198,8 @@ bool ImageEnvironment::ConstructEnvironmentFromFile(const Str file_name) {
         std::istringstream s(line);
 
         for (auto i = 0; i < 3; ++i) {
-            s >> size[i];
+            std::getline(s, field, delimiter);
+            size[i] = std::stoi(field);
         }
     }
     else {
@@ -207,7 +216,8 @@ bool ImageEnvironment::ConstructEnvironmentFromFile(const Str file_name) {
         std::istringstream s(line);
 
         for (auto i = 0; i < 3; ++i) {
-            s >> obs[i];
+            std::getline(s, field, delimiter);
+            obs[i] = std::stoi(field);
         }
 
         this->AddObstacle(obs, "defualt");
@@ -222,9 +232,16 @@ bool ImageEnvironment::ConstructCostFromFile(const Str file_name) {
     std::ifstream fin;
     fin.open(file_name);
 
+    char delimiter = ' ';
+    if (file_name.compare(file_name.size() - 4, 4, ".csv") == 0) {
+        delimiter = ',';
+    }
+
     if (!fin.is_open()) {
         throw std::runtime_error("Failed to open " + file_name);
     }
+
+    Str field;
 
     Str line;
     IdxPoint obs;
@@ -235,10 +252,12 @@ bool ImageEnvironment::ConstructCostFromFile(const Str file_name) {
         std::istringstream s(line);
 
         for (auto i = 0; i < 3; ++i) {
-            s >> obs[i];
+            std::getline(s, field, delimiter);
+            obs[i] = std::stoi(field);
         }
 
-        s >> cost;
+        std::getline(s, field, delimiter);
+        cost = std::stod(field);
 
         this->AddCost(obs, cost);
         std::cout << "\rLoaded cost: " << ++iter << std::flush;
