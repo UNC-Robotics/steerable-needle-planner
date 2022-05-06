@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.8)
 
-project(snp)
+project(steerable-needle-planner)
 
-# Build type.
+# Build type
 set(default_build_type "Release")
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -20,10 +20,10 @@ endif()
 
 message(STATUS "Building ${CMAKE_BUILD_TYPE}")
 
-# Use C++ 17 for nign and mpt.
+# Use C++ 17 for nign and mpt
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED 17)
-set(USE_C++17 1)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
 
 # OpenMp
 OPTION (USE_OpenMP "Use OpenMP to enable <omp.h>" ON)
@@ -39,13 +39,18 @@ if(APPLE AND USE_OpenMP)
         set(OpenMP_libiomp5_LIBRARY ${OpenMP_C_LIB_NAMES})
     endif()
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-      set(OpenMP_CXX "${CMAKE_CXX_COMPILER}")
-      set(OpenMP_CXX_FLAGS "-fopenmp=libomp -Wno-unused-command-line-argument")
-      set(OpenMP_CXX_LIB_NAMES "libomp" "libgomp" "libiomp5")
-      set(OpenMP_libomp_LIBRARY ${OpenMP_CXX_LIB_NAMES})
-      set(OpenMP_libgomp_LIBRARY ${OpenMP_CXX_LIB_NAMES})
-      set(OpenMP_libiomp5_LIBRARY ${OpenMP_CXX_LIB_NAMES})
+        set(OpenMP_CXX "${CMAKE_CXX_COMPILER}")
+        set(OpenMP_CXX_FLAGS "-fopenmp=libomp -Wno-unused-command-line-argument")
+        set(OpenMP_CXX_LIB_NAMES "libomp" "libgomp" "libiomp5")
+        set(OpenMP_libomp_LIBRARY ${OpenMP_CXX_LIB_NAMES})
+        set(OpenMP_libgomp_LIBRARY ${OpenMP_CXX_LIB_NAMES})
+        set(OpenMP_libiomp5_LIBRARY ${OpenMP_CXX_LIB_NAMES})
     endif()
+
+    set(OPENMP_LIBRARIES "/usr/local/opt/llvm/lib")
+    set(OPENMP_INCLUDES "/usr/local/opt/llvm/include")
+    include_directories("${OPENMP_INCLUDES}")
+    link_directories("${OPENMP_LIBRARIES}")
 endif()
 
 if(USE_OpenMP)
@@ -55,13 +60,11 @@ endif(USE_OpenMP)
 
 if (OPENMP_FOUND)
     message("OpenMP is found!")
-    # include_directories("${OPENMP_INCLUDES}")
-    # link_directories("${OPENMP_LIBRARIES}")
 if(NOT APPLE)
     set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
     set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 endif()
-    # set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
+
 endif(OPENMP_FOUND)
 
 
