@@ -155,13 +155,13 @@ If you use this source code, please cite the following papers accordingly:
     doi       = {10.15607/RSS.2021.XVII.081}
 }
 
-@article{Fu2021_arXiv,
-      title={Resolution-Optimal Motion Planning for Steerable Needles}, 
-      author={Mengyu Fu and Kiril Solovey and Oren Salzman and Ron Alterovitz},
-      year={2021},
-      journal={arXiv preprint arXiv:2110.02907v1 [cs.RO]},
-      eprint={2110.02907},
-      archivePrefix={arXiv},
-      primaryClass={cs.RO}
+@inproceedings{Fu2022_ICRA,
+    author={Mengyu Fu and Kiril Solovey and Oren Salzman and Ron Alterovitz},
+    title={{Resolution-Optimal Motion Planning for Steerable Needles}},
+    booktitle = {2022 IEEE International Conference on Robotics and Automation (ICRA)},
+    year={2022},
+    volume={},
+    number={},
+    pages={9652-9659}
 }
 ```
